@@ -328,18 +328,18 @@ class ReactAgentPipeline(BaseReasoning):
                 "choices": llm_choices,
                 "special_type": "llm",
                 "info": (
-                    "The language model to use for generating the answer. If None, "
-                    "the application default language model will be used."
+                    "用于生成回答的 language model。如果为空，"
+                    "将使用应用默认 language model。"
                 ),
             },
             "tools": {
-                "name": "Tools for knowledge retrieval",
+                "name": "用于知识检索的 Tools",
                 "value": ["SearchDoc", "LLM"],
                 "component": "checkboxgroup",
                 "choices": tool_choices,
             },
             "max_iterations": {
-                "name": "Maximum number of iterations the LLM can go through",
+                "name": "LLM 最大迭代次数",
                 "value": 5,
                 "component": "number",
             },

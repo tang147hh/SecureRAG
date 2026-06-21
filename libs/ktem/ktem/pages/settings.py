@@ -120,13 +120,13 @@ class SettingsPage(BasePage):
     def on_building_ui(self):
         if not KH_SSO_ENABLED:
             self.setting_save_btn = gr.Button(
-                "Save & Close",
+                "保存并关闭",
                 variant="primary",
                 elem_classes=["right-button"],
                 elem_id="save-setting-btn",
             )
         if self._app.f_user_management:
-            with gr.Tab("User settings"):
+            with gr.Tab("用户设置"):
                 self.user_tab()
 
         self.app_tab()
@@ -168,7 +168,7 @@ class SettingsPage(BasePage):
             )
 
             def get_name(user_id):
-                name = "Current user: "
+                name = "当前用户："
                 if user_id:
                     with Session(engine) as session:
                         statement = select(User).where(User.id == user_id)
@@ -226,7 +226,7 @@ class SettingsPage(BasePage):
                 show_progress="hidden",
             )
             onSignOutClick = self.signout.click(
-                lambda: (None, "Current user: ___", "", ""),
+                lambda: (None, "当前用户：___", "", ""),
                 inputs=[],
                 outputs=[
                     self._user_id,
@@ -247,22 +247,22 @@ class SettingsPage(BasePage):
 
     def user_tab(self):
         # user management
-        self.current_name = gr.Markdown("Current user: ___")
+        self.current_name = gr.Markdown("当前用户：___")
 
         if KH_SSO_ENABLED:
             import gradiologin as grlogin
 
-            self.sso_signout = grlogin.LogoutButton("Logout")
+            self.sso_signout = grlogin.LogoutButton("退出登录")
         else:
-            self.signout = gr.Button("Logout")
+            self.signout = gr.Button("退出登录")
 
             self.password_change = gr.Textbox(
-                label="New password", interactive=True, type="password"
+                label="新密码", interactive=True, type="password"
             )
             self.password_change_confirm = gr.Textbox(
-                label="Confirm password", interactive=True, type="password"
+                label="确认密码", interactive=True, type="password"
             )
-            self.password_change_btn = gr.Button("Change password", interactive=True)
+            self.password_change_btn = gr.Button("修改密码", interactive=True)
 
     def change_password(self, user_id, password, password_confirm):
         from ktem.pages.resources.user import validate_password
@@ -282,14 +282,14 @@ class SettingsPage(BasePage):
                 user.password = hashed_password
                 session.add(user)
                 session.commit()
-                gr.Info("Password changed")
+                gr.Info("密码已修改")
             else:
-                gr.Warning("User not found")
+                gr.Warning("未找到用户")
 
         return "", ""
 
     def app_tab(self):
-        with gr.Tab("General", visible=self._render_app_tab):
+        with gr.Tab("通用", visible=self._render_app_tab):
             for n, si in self._default_settings.application.settings.items():
                 obj = render_setting_item(si, si.value)
                 self._components[f"application.{n}"] = obj
@@ -306,7 +306,7 @@ class SettingsPage(BasePage):
         #         self._components[f"index.{n}"] = obj
 
         id2name = {k: v.name for k, v in self._app.index_manager.info().items()}
-        with gr.Tab("Retrieval settings", visible=self._render_index_tab):
+        with gr.Tab("Retrieval 设置", visible=self._render_index_tab):
             for pn, sig in self._default_settings.index.options.items():
                 name = id2name.get(pn, f"<id {pn}>")
                 with gr.Tab(name):
@@ -319,7 +319,7 @@ class SettingsPage(BasePage):
                             self._embeddings.append(obj)
 
     def reasoning_tab(self):
-        with gr.Tab("Reasoning settings", visible=self._render_reasoning_tab):
+        with gr.Tab("Reasoning 设置", visible=self._render_reasoning_tab):
             with gr.Group():
                 for n, si in self._default_settings.reasoning.settings.items():
                     if n == "use":
@@ -331,7 +331,7 @@ class SettingsPage(BasePage):
                     if si.special_type == "embedding":
                         self._embeddings.append(obj)
 
-            gr.Markdown("### Reasoning-specific settings")
+            gr.Markdown("### Reasoning 专属设置")
             self._components["reasoning.use"] = render_setting_item(
                 self._default_settings.reasoning.settings["use"],
                 self._default_settings.reasoning.settings["use"].value,
@@ -346,7 +346,7 @@ class SettingsPage(BasePage):
                 ) as self._reasoning_mode[pn]:
                     reasoning = reasonings.get(pn, None)
                     if reasoning is None:
-                        gr.Markdown("**Name**: Description")
+                        gr.Markdown("**名称**：描述")
                     else:
                         info = reasoning.get_info()
                         gr.Markdown(f"**{info['name']}**: {info['description']}")
@@ -413,7 +413,7 @@ class SettingsPage(BasePage):
         """
         setting = {key: value for key, value in zip(self.component_names(), args)}
         if user_id is None:
-            gr.Warning("Need to login before saving settings")
+            gr.Warning("保存设置前需要先登录")
             return setting
 
         with Session(engine) as session:
@@ -427,7 +427,7 @@ class SettingsPage(BasePage):
             session.add(user_setting)
             session.commit()
 
-        gr.Info("Setting saved")
+        gr.Info("设置已保存")
         return setting
 
     def components(self) -> list:
@@ -454,9 +454,9 @@ class SettingsPage(BasePage):
             from ktem.llms.manager import llms
 
             if llms._default:
-                llm_choices = [(f"{llms._default} (default)", "")]
+                llm_choices = [(f"{llms._default} (默认)", "")]
             else:
-                llm_choices = [("(random)", "")]
+                llm_choices = [("(随机)", "")]
             llm_choices += [(_, _) for _ in llms.options().keys()]
             return gr.update(choices=llm_choices)
 
@@ -464,9 +464,9 @@ class SettingsPage(BasePage):
             from ktem.embeddings.manager import embedding_models_manager
 
             if embedding_models_manager._default:
-                emb_choices = [(f"{embedding_models_manager._default} (default)", "")]
+                emb_choices = [(f"{embedding_models_manager._default} (默认)", "")]
             else:
-                emb_choices = [("(random)", "")]
+                emb_choices = [("(随机)", "")]
             emb_choices += [(_, _) for _ in embedding_models_manager.options().keys()]
             return gr.update(choices=emb_choices)
 

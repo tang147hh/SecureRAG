@@ -142,6 +142,7 @@ if config("AZURE_OPENAI_API_KEY", default="") and config(
 
 OPENAI_DEFAULT = "<YOUR_OPENAI_KEY>"
 OPENAI_API_KEY = config("OPENAI_API_KEY", default=OPENAI_DEFAULT)
+DEEPSEEK_API_KEY = config("DEEPSEEK_API_KEY", default="")
 GOOGLE_API_KEY = config("GOOGLE_API_KEY", default="your-key")
 IS_OPENAI_DEFAULT = len(OPENAI_API_KEY) > 0 and OPENAI_API_KEY != OPENAI_DEFAULT
 
@@ -170,6 +171,19 @@ if OPENAI_API_KEY:
             "context_length": 8191,
         },
         "default": IS_OPENAI_DEFAULT,
+    }
+
+if DEEPSEEK_API_KEY:
+    KH_LLMS["deepseek"] = {
+        "spec": {
+            "__type__": "kotaemon.llms.ChatOpenAI",
+            "temperature": 0,
+            "base_url": config("DEEPSEEK_API_BASE", default="https://api.deepseek.com"),
+            "api_key": DEEPSEEK_API_KEY,
+            "model": config("DEEPSEEK_CHAT_MODEL", default="deepseek-v4-flash"),
+            "timeout": 60,
+        },
+        "default": not IS_OPENAI_DEFAULT,
     }
 
 VOYAGE_API_KEY = config("VOYAGE_API_KEY", default="")
@@ -243,7 +257,7 @@ KH_LLMS["google"] = {
         "model_name": "gemini-1.5-flash",
         "api_key": GOOGLE_API_KEY,
     },
-    "default": not IS_OPENAI_DEFAULT,
+    "default": not IS_OPENAI_DEFAULT and not DEEPSEEK_API_KEY,
 }
 KH_LLMS["groq"] = {
     "spec": {

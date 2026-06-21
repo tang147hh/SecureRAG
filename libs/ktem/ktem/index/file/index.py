@@ -386,53 +386,52 @@ class FileIndex(BaseIndex):
                 "value": embedding_default,
                 "component": "dropdown",
                 "choices": embedding_choices,
-                "info": "The name of embedding model to use.",
+                "info": "要使用的 embedding model 名称。",
             },
             "supported_file_types": {
-                "name": "Supported file types",
+                "name": "支持的文件类型",
                 "value": ".pdf, .txt",
                 "component": "text",
-                "info": "The file types that can be indexed, separated by comma.",
+                "info": "可被 indexed 的文件类型，用逗号分隔。",
             },
             "max_file_size": {
-                "name": "Max file size (MB)",
+                "name": "最大文件大小 (MB)",
                 "value": 1000,
                 "component": "number",
-                "info": "The maximum size of file. Set 0 to disable.",
+                "info": "文件最大大小。设为 0 可禁用限制。",
             },
             "max_number_of_files": {
-                "name": "Max number of files that can be indexed",
+                "name": "可 indexed 的最大文件数",
                 "value": 0,
                 "component": "number",
                 "info": (
-                    "The total number of files that can be indexed on the system. "
-                    "Set 0 to disable."
+                    "系统中可被 indexed 的文件总数。"
+                    "设为 0 可禁用限制。"
                 ),
             },
             "private": {
-                "name": "Make private",
+                "name": "设为私有",
                 "value": False,
                 "component": "radio",
-                "choices": [("Yes", True), ("No", False)],
-                "info": "If private, files will not be accessible across users.",
+                "choices": [("是", True), ("否", False)],
+                "info": "如果设为私有，文件将不能跨用户访问。",
             },
             "chunk_size": {
-                "name": "Size of chunk (number of tokens)",
+                "name": "chunk 大小（tokens 数）",
                 "value": 0,
                 "component": "number",
                 "info": (
-                    "Number of tokens of each text segment. "
-                    "Set 0 to use developer setting."
+                    "每个文本片段的 tokens 数。"
+                    "设为 0 使用开发者设置。"
                 ),
             },
             "chunk_overlap": {
-                "name": "Number of overlapping tokens between chunks",
+                "name": "chunks 之间重叠的 tokens 数",
                 "value": 0,
                 "component": "number",
                 "info": (
-                    "Number of tokens that consecutive text segments "
-                    "should overlap with each other. "
-                    "Set 0 to use developer setting."
+                    "连续文本片段之间应相互重叠的 tokens 数。"
+                    "设为 0 使用开发者设置。"
                 ),
             },
         }

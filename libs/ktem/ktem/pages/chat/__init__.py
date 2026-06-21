@@ -55,12 +55,12 @@ if KH_WEB_SEARCH_BACKEND:
         print(f"Error importing {KH_WEB_SEARCH_BACKEND}: {e}")
 
 REASONING_LIMITS = 2 if KH_DEMO_MODE else 10
-DEFAULT_SETTING = "(default)"
+DEFAULT_SETTING = "(默认)"
 INFO_PANEL_SCALES = {True: 8, False: 4}
 DEFAULT_QUESTION = (
-    "What is the summary of this document?"
+    "这份文档的摘要是什么？"
     if not KH_DEMO_MODE
-    else "What is the summary of this paper?"
+    else "这篇 paper 的摘要是什么？"
 )
 
 chat_input_focus_js = """
@@ -243,7 +243,7 @@ class ChatPage(BasePage):
                     index_name = index.name
 
                     if KH_DEMO_MODE and is_first_index:
-                        index_name = "Select from Paper Collection"
+                        index_name = "从 Paper Collection 中选择"
 
                     with gr.Accordion(
                         label=index_name,
@@ -278,7 +278,7 @@ class ChatPage(BasePage):
 
                 if len(self._app.index_manager.indices) > 0:
                     quick_upload_label = (
-                        "Quick Upload" if not KH_DEMO_MODE else "Or input new paper URL"
+                        "快速上传" if not KH_DEMO_MODE else "或输入新的 paper URL"
                     )
 
                     with gr.Accordion(label=quick_upload_label) as _:
@@ -293,9 +293,9 @@ class ChatPage(BasePage):
                             )
                         self.quick_urls = gr.Textbox(
                             placeholder=(
-                                "Or paste URLs"
+                                "或粘贴 URLs"
                                 if not KH_DEMO_MODE
-                                else "Paste Arxiv URLs\n(https://arxiv.org/abs/xxx)"
+                                else "粘贴 Arxiv URLs\n(https://arxiv.org/abs/xxx)"
                             ),
                             lines=1,
                             container=False,
@@ -308,7 +308,7 @@ class ChatPage(BasePage):
                 if not KH_DEMO_MODE:
                     self.report_issue = ReportIssue(self._app)
                 else:
-                    with gr.Accordion(label="Related papers", open=False):
+                    with gr.Accordion(label="相关 papers", open=False):
                         self.related_papers = gr.Markdown(elem_id="related-papers")
 
                     self.hint_page = HintPage(self._app)
@@ -320,17 +320,17 @@ class ChatPage(BasePage):
                 self.chat_panel = ChatPanel(self._app)
 
                 with gr.Accordion(
-                    label="Chat settings",
+                    label="聊天设置",
                     elem_id="chat-settings-expand",
                     open=False,
                     visible=not KH_DEMO_MODE,
                 ) as self.chat_settings:
                     with gr.Row(elem_id="quick-setting-labels"):
-                        gr.HTML("Reasoning method")
+                        gr.HTML("Reasoning 方法")
                         gr.HTML(
                             "Model", visible=not KH_DEMO_MODE and not KH_SSO_ENABLED
                         )
-                        gr.HTML("Language")
+                        gr.HTML("语言")
 
                     with gr.Row():
                         reasoning_setting = (
@@ -378,7 +378,7 @@ class ChatPage(BasePage):
                         if not config("USE_LOW_LLM_REQUESTS", default=False, cast=bool):
                             self.use_mindmap = gr.State(value=True)
                             self.use_mindmap_check = gr.Checkbox(
-                                label="Mindmap (on)",
+                                label="Mindmap（开）",
                                 container=False,
                                 elem_id="use-mindmap-checkbox",
                                 value=True,
@@ -386,7 +386,7 @@ class ChatPage(BasePage):
                         else:
                             self.use_mindmap = gr.State(value=False)
                             self.use_mindmap_check = gr.Checkbox(
-                                label="Mindmap (off)",
+                                label="Mindmap（关）",
                                 container=False,
                                 elem_id="use-mindmap-checkbox",
                                 value=False,
@@ -396,7 +396,7 @@ class ChatPage(BasePage):
                 scale=INFO_PANEL_SCALES[False], elem_id="chat-info-panel"
             ) as self.info_column:
                 with gr.Accordion(
-                    label="Information panel", open=True, elem_id="info-expand"
+                    label="信息面板", open=True, elem_id="info-expand"
                 ):
                     self.modal = gr.HTML("<div id='pdf-modal'></div>")
                     self.plot_panel = gr.Plot(visible=False)
@@ -819,7 +819,7 @@ class ChatPage(BasePage):
             outputs=[self._reasoning_type],
         )
         self.use_mindmap_check.change(
-            lambda x: (x, gr.update(label="Mindmap " + ("(on)" if x else "(off)"))),
+            lambda x: (x, gr.update(label="Mindmap" + ("（开）" if x else "（关）"))),
             inputs=[self.use_mindmap_check],
             outputs=[self.use_mindmap, self.use_mindmap_check],
             show_progress="hidden",
@@ -830,7 +830,7 @@ class ChatPage(BasePage):
 
         def raise_error_on_state(state):
             if not state:
-                raise ValueError("Chat suggestion disabled")
+                raise ValueError("聊天建议已关闭")
 
         self.chat_control.cb_suggest_chat.change(
             fn=toggle_chat_suggestion,
@@ -893,7 +893,7 @@ class ChatPage(BasePage):
             print("User ID:", sso_user_id)
 
         if not chat_input:
-            raise ValueError("Input is empty")
+            raise ValueError("输入为空")
 
         chat_input_text = chat_input.get("text", "")
         display_chat_input_text = format_mentions_for_display(chat_input_text)
@@ -961,7 +961,7 @@ class ChatPage(BasePage):
             chat_history = chat_history + [(display_chat_input_text, None)]
         else:
             if not chat_history:
-                raise gr.Error("Empty chat")
+                raise gr.Error("聊天为空")
 
         if not conv_id:
             if not KH_DEMO_MODE:
@@ -1010,7 +1010,7 @@ class ChatPage(BasePage):
 
     def on_set_public_conversation(self, is_public, convo_id):
         if not convo_id:
-            gr.Warning("No conversation selected")
+            gr.Warning("未选择会话")
             return
 
         with Session(engine) as session:
@@ -1027,7 +1027,7 @@ class ChatPage(BasePage):
                 session.commit()
 
                 gr.Info(
-                    f"Conversation: {name} is {'public' if is_public else 'private'}."
+                    f"会话：{name} 已设为{'公开' if is_public else '私有'}。"
                 )
 
     def on_subscribe_public_events(self):
@@ -1100,7 +1100,7 @@ class ChatPage(BasePage):
     ):
         """Update the data source"""
         if not convo_id:
-            gr.Warning("No conversation selected")
+            gr.Warning("未选择会话")
             return
 
         # if not regen, then append the new message
@@ -1150,7 +1150,7 @@ class ChatPage(BasePage):
     def reasoning_changed(self, reasoning_type):
         if reasoning_type != DEFAULT_SETTING:
             # override app settings state (temporary)
-            gr.Info("Reasoning type changed to `{}`".format(reasoning_type))
+            gr.Info("Reasoning 类型已切换为 `{}`".format(reasoning_type))
         return reasoning_type
 
     def is_liked(self, convo_id, liked: gr.LikeData):

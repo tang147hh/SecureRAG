@@ -11,7 +11,7 @@ from .manager import mcp_manager
 
 logger = logging.getLogger(__name__)
 
-TOOLS_DEFAULT = "# Available Tools\n\nSelect or add an MCP server to view its tools."
+TOOLS_DEFAULT = "# 可用 Tools\n\n请选择或添加一个 MCP server 以查看其 Tools。"
 
 MCP_SERVERS_KEY = "mcpServers"
 
@@ -29,9 +29,9 @@ class MCPManagement(BasePage):
         self.on_building_ui()
 
     def on_building_ui(self):
-        with gr.Tab(label="View"):
+        with gr.Tab(label="查看"):
             self.mcp_list = gr.DataFrame(
-                headers=["name", "config"],
+                headers=["名称", "config"],
                 interactive=False,
                 column_widths=[30, 70],
             )
@@ -41,7 +41,7 @@ class MCPManagement(BasePage):
                 with gr.Row():
                     with gr.Column():
                         self.edit_config = gr.Code(
-                            label="Configuration (JSON)",
+                            label="配置 (JSON)",
                             language="json",
                             lines=10,
                         )
@@ -49,33 +49,33 @@ class MCPManagement(BasePage):
                         with gr.Row(visible=False) as self._selected_panel_btn:
                             with gr.Column():
                                 self.btn_edit_save = gr.Button(
-                                    "Save", min_width=10, variant="primary"
+                                    "保存", min_width=10, variant="primary"
                                 )
                             with gr.Column():
                                 self.btn_delete = gr.Button(
-                                    "Delete", min_width=10, variant="stop"
+                                    "删除", min_width=10, variant="stop"
                                 )
                                 with gr.Row():
                                     self.btn_delete_yes = gr.Button(
-                                        "Confirm Delete",
+                                        "确认删除",
                                         variant="stop",
                                         visible=False,
                                         min_width=10,
                                     )
                                     self.btn_delete_no = gr.Button(
-                                        "Cancel", visible=False, min_width=10
+                                        "取消", visible=False, min_width=10
                                     )
                             with gr.Column():
-                                self.btn_close = gr.Button("Close", min_width=10)
+                                self.btn_close = gr.Button("关闭", min_width=10)
 
                     with gr.Column():
                         self.edit_tools_display = gr.Markdown(TOOLS_DEFAULT)
 
-        with gr.Tab(label="Add"):
+        with gr.Tab(label="添加"):
             with gr.Row():
                 with gr.Column(scale=2):
                     self.config = gr.Code(
-                        label="Configuration (JSON)",
+                        label="配置 (JSON)",
                         language="json",
                         lines=10,
                         value=EXAMPLE_CONFIG,
@@ -84,7 +84,7 @@ class MCPManagement(BasePage):
                         "<br/>"
                     )  # Fix: Prevent the overflow of the gr.Code affect click button
                     with gr.Row():
-                        self.btn_new = gr.Button("Add MCP Servers", variant="primary")
+                        self.btn_new = gr.Button("添加 MCP Servers", variant="primary")
 
                 with gr.Column(scale=3):
                     self.add_tools_display = gr.Markdown(TOOLS_DEFAULT)
@@ -201,31 +201,31 @@ class MCPManagement(BasePage):
             enabled_tools = config.get("enabled_tools", None)
             return format_tool_list(tool_infos, enabled_tools)
         except Exception as e:
-            return f"❌ Failed to fetch tools: {e}"
+            return f"❌ 获取 Tools 失败：{e}"
 
     def create_server(self, config_str):
         """Create server(s), show loading placeholder."""
         try:
             configs = json.loads(config_str)
         except json.JSONDecodeError as e:
-            raise gr.Error(f"Invalid JSON: {e}")
+            raise gr.Error(f"无效 JSON：{e}")
 
         if not isinstance(configs, dict) or MCP_SERVERS_KEY not in configs:
             raise gr.Error(
-                f"Config must be a dictionary with '{MCP_SERVERS_KEY}' root key."
+                f"Config 必须是包含 '{MCP_SERVERS_KEY}' 根 key 的 dictionary。"
             )
 
         mcp_servers = configs[MCP_SERVERS_KEY]
         if not isinstance(mcp_servers, dict):
             raise gr.Error(
-                f"'{MCP_SERVERS_KEY}' must be a mapping of server names to configs."
+                f"'{MCP_SERVERS_KEY}' 必须是 server 名称到 configs 的映射。"
             )
 
         # Validate that no names are empty before processing
         for name in mcp_servers:
             name = name.strip()
             if not name:
-                raise gr.Error("Server names cannot be empty.")
+                raise gr.Error("Server 名称不能为空。")
 
         success_count = 0
         failed_count = 0
@@ -233,20 +233,20 @@ class MCPManagement(BasePage):
         for name, config in mcp_servers.items():
             name = name.strip()
             if name in mcp_manager.info():
-                gr.Warning(f"MCP server '{name}' already exists. Skipping.")
+                gr.Warning(f"MCP server '{name}' 已存在，已跳过。")
                 failed_count += 1
                 continue
 
             try:
                 mcp_manager.add(name, config)
                 success_count += 1
-                msgs.append(f"# Tools for '{name}'\n\n⏳ Fetching tools...")
+                msgs.append(f"# '{name}' 的 Tools\n\n⏳ 正在获取 Tools...")
             except Exception as e:
-                gr.Warning(f"Failed to create MCP server '{name}': {e}")
+                gr.Warning(f"创建 MCP server '{name}' 失败：{e}")
                 failed_count += 1
 
         if success_count > 0:
-            gr.Info(f"{success_count} MCP server(s) created successfully")
+            gr.Info(f"{success_count} 个 MCP server 创建成功")
 
         if not msgs:
             return TOOLS_DEFAULT
@@ -260,19 +260,19 @@ class MCPManagement(BasePage):
         try:
             configs = json.loads(config_str)
         except json.JSONDecodeError:
-            return "❌ Invalid JSON config"
+            return "❌ 无效 JSON config"
 
         if not isinstance(configs, dict) or MCP_SERVERS_KEY not in configs:
-            return f"❌ Config must be a dictionary with '{MCP_SERVERS_KEY}' root key"
+            return f"❌ Config 必须是包含 '{MCP_SERVERS_KEY}' 根 key 的 dictionary"
 
         mcp_servers = configs[MCP_SERVERS_KEY]
         if not isinstance(mcp_servers, dict):
-            return f"❌ '{MCP_SERVERS_KEY}' must be a dictionary"
+            return f"❌ '{MCP_SERVERS_KEY}' 必须是 dictionary"
 
         msgs = []
         for name, config in mcp_servers.items():
             msgs.append(
-                f"# Tools for '{name.strip()}'\n\n{self._fetch_tools_markdown(config)}"
+                f"# '{name.strip()}' 的 Tools\n\n{self._fetch_tools_markdown(config)}"
             )
         return "\n\n".join(msgs)
 
@@ -284,7 +284,7 @@ class MCPManagement(BasePage):
         if not entry:
             return TOOLS_DEFAULT
         config = entry.get("config", {})
-        return f"# Tools for '{selected_name}'\n\n{self._fetch_tools_markdown(config)}"
+        return f"# '{selected_name}' 的 Tools\n\n{self._fetch_tools_markdown(config)}"
 
     def list_servers(self):
         items = []
@@ -302,7 +302,7 @@ class MCPManagement(BasePage):
 
     def select_server(self, mcp_list, ev: gr.SelectData):
         if ev.value == "-" and ev.index[0] == 0:
-            gr.Info("No MCP server configured. Please add one first.")
+            gr.Info("尚未配置 MCP server，请先添加一个。")
             return ""
         if not ev.selected:
             return ""
@@ -331,7 +331,7 @@ class MCPManagement(BasePage):
             gr.update(visible=False),
             gr.update(visible=False),
             gr.update(value=config_str),
-            gr.update(value=f"# Tools for '{selected_name}'\n\n⏳ Fetching tools..."),
+            gr.update(value=f"# '{selected_name}' 的 Tools\n\n⏳ 正在获取 Tools..."),
         )
 
     def on_btn_delete_click(self):
@@ -344,9 +344,9 @@ class MCPManagement(BasePage):
     def delete_server(self, selected_name):
         try:
             mcp_manager.delete(selected_name)
-            gr.Info(f"MCP server '{selected_name}' deleted successfully")
+            gr.Info(f"MCP server '{selected_name}' 删除成功")
         except Exception as e:
-            gr.Error(f"Failed to delete MCP server '{selected_name}': {e}")
+            gr.Error(f"删除 MCP server '{selected_name}' 失败：{e}")
             return selected_name
         return ""
 
@@ -354,13 +354,13 @@ class MCPManagement(BasePage):
         try:
             config = json.loads(config_str)
         except json.JSONDecodeError as e:
-            raise gr.Error(f"Invalid JSON: {e}")
+            raise gr.Error(f"无效 JSON：{e}")
 
         try:
             mcp_manager.update(selected_name, config)
-            gr.Info(f"MCP server '{selected_name}' saved successfully")
+            gr.Info(f"MCP server '{selected_name}' 保存成功")
         except Exception as e:
-            raise gr.Error(f"Failed to save MCP server '{selected_name}': {e}")
+            raise gr.Error(f"保存 MCP server '{selected_name}' 失败：{e}")
 
         # Show loading placeholder; tools fetched in chained .then()
-        return f"# Tools for '{selected_name}'\n\n⏳ Refreshing tools..."
+        return f"# '{selected_name}' 的 Tools\n\n⏳ 正在刷新 Tools..."

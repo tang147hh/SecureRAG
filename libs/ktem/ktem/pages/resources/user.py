@@ -7,23 +7,18 @@ from ktem.db.models import User, engine
 from sqlmodel import Session, select
 from theflow.settings import settings as flowsettings
 
-USERNAME_RULE = """**Username rule:**
+USERNAME_RULE = """**用户名规则：**
 
-- Username is case-insensitive
-- Username must be at least 3 characters long
-- Username must be at most 32 characters long
-- Username must contain only alphanumeric characters and underscores
+- 用户名不区分大小写
+- 用户名至少 3 个字符
+- 用户名最多 32 个字符
+- 用户名只能包含字母、数字和下划线
 """
 
 
-PASSWORD_RULE = """**Password rule:**
+PASSWORD_RULE = """**密码规则：**
 
-- Password must be at least 8 characters long
-- Password must contain at least one uppercase letter
-- Password must contain at least one lowercase letter
-- Password must contain at least one digit
-- Password must contain at least one special character from the following:
-    ^ $ * . [ ] { } ( ) ? - " ! @ # % & / \\ , > < ' : ; | _ ~  + =
+- 密码至少 8 个字符
 """
 
 
@@ -35,15 +30,13 @@ def validate_username(usn):
     """
     errors = []
     if len(usn) < 3:
-        errors.append("Username must be at least 3 characters long")
+        errors.append("用户名至少 3 个字符")
 
     if len(usn) > 32:
-        errors.append("Username must be at most 32 characters long")
+        errors.append("用户名最多 32 个字符")
 
     if not usn.replace("_", "").isalnum():
-        errors.append(
-            "Username must contain only alphanumeric characters and underscores"
-        )
+        errors.append("用户名只能包含字母、数字和下划线")
 
     return "; ".join(errors)
 
@@ -52,11 +45,6 @@ def validate_password(pwd, pwd_cnf):
     """Validate that whether password is valid
 
     - Password must be at least 8 characters long
-    - Password must contain at least one uppercase letter
-    - Password must contain at least one lowercase letter
-    - Password must contain at least one digit
-    - Password must contain at least one special character from the following:
-        ^ $ * . [ ] { } ( ) ? - " ! @ # % & / \\ , > < ' : ; | _ ~  + =
 
     Args:
         pwd (str): Password
@@ -67,26 +55,10 @@ def validate_password(pwd, pwd_cnf):
     """
     errors = []
     if pwd != pwd_cnf:
-        errors.append("Password does not match")
+        errors.append("两次输入的密码不一致")
 
     if len(pwd) < 8:
-        errors.append("Password must be at least 8 characters long")
-
-    if not any(c.isupper() for c in pwd):
-        errors.append("Password must contain at least one uppercase letter")
-
-    if not any(c.islower() for c in pwd):
-        errors.append("Password must contain at least one lowercase letter")
-
-    if not any(c.isdigit() for c in pwd):
-        errors.append("Password must contain at least one digit")
-
-    special_chars = "^$*.[]{}()?-\"!@#%&/\\,><':;|_~+="
-    if not any(c in special_chars for c in pwd):
-        errors.append(
-            "Password must contain at least one special character from the "
-            f"following: {special_chars}"
-        )
+        errors.append("密码至少 8 个字符")
 
     if errors:
         return "; ".join(errors)
@@ -130,53 +102,53 @@ class UserManagement(BasePage):
 
             is_created = create_user(usn, pwd)
             if is_created:
-                gr.Info(f'User "{usn}" created successfully')
+                gr.Info(f'用户 "{usn}" 创建成功')
 
     def on_building_ui(self):
-        with gr.Tab(label="User list"):
+        with gr.Tab(label="用户列表"):
             self.state_user_list = gr.State(value=None)
             self.user_list = gr.DataFrame(
-                headers=["id", "name", "admin"],
+                headers=["ID", "名称", "管理员"],
                 column_widths=[0, 50, 50],
                 interactive=False,
             )
 
             with gr.Group(visible=False) as self._selected_panel:
                 self.selected_user_id = gr.State(value=-1)
-                self.usn_edit = gr.Textbox(label="Username")
+                self.usn_edit = gr.Textbox(label="用户名")
                 with gr.Row():
-                    self.pwd_edit = gr.Textbox(label="Change password", type="password")
+                    self.pwd_edit = gr.Textbox(label="修改密码", type="password")
                     self.pwd_cnf_edit = gr.Textbox(
-                        label="Confirm change password",
+                        label="确认修改密码",
                         type="password",
                     )
-                self.admin_edit = gr.Checkbox(label="Admin")
+                self.admin_edit = gr.Checkbox(label="管理员")
 
             with gr.Row(visible=False) as self._selected_panel_btn:
                 with gr.Column():
-                    self.btn_edit_save = gr.Button("Save")
+                    self.btn_edit_save = gr.Button("保存")
                 with gr.Column():
-                    self.btn_delete = gr.Button("Delete")
+                    self.btn_delete = gr.Button("删除")
                     with gr.Row():
                         self.btn_delete_yes = gr.Button(
-                            "Confirm delete", variant="primary", visible=False
+                            "确认删除", variant="primary", visible=False
                         )
-                        self.btn_delete_no = gr.Button("Cancel", visible=False)
+                        self.btn_delete_no = gr.Button("取消", visible=False)
                 with gr.Column():
-                    self.btn_close = gr.Button("Close")
+                    self.btn_close = gr.Button("关闭")
 
-        with gr.Tab(label="Create user"):
-            self.usn_new = gr.Textbox(label="Username", interactive=True)
+        with gr.Tab(label="创建用户"):
+            self.usn_new = gr.Textbox(label="用户名", interactive=True)
             self.pwd_new = gr.Textbox(
-                label="Password", type="password", interactive=True
+                label="密码", type="password", interactive=True
             )
             self.pwd_cnf_new = gr.Textbox(
-                label="Confirm password", type="password", interactive=True
+                label="确认密码", type="password", interactive=True
             )
             with gr.Row():
                 gr.Markdown(USERNAME_RULE)
                 gr.Markdown(PASSWORD_RULE)
-            self.btn_new = gr.Button("Create user")
+            self.btn_new = gr.Button("创建用户")
 
     def on_register_events(self):
         self.btn_new.click(
@@ -299,7 +271,7 @@ class UserManagement(BasePage):
             statement = select(User).where(User.username_lower == usn.lower())
             result = session.exec(statement).all()
             if result:
-                gr.Warning(f'Username "{usn}" already exists')
+                gr.Warning(f'用户名 "{usn}" 已存在')
                 return
 
             hashed_password = hashlib.sha256(pwd.encode()).hexdigest()
@@ -308,7 +280,7 @@ class UserManagement(BasePage):
             )
             session.add(user)
             session.commit()
-            gr.Info(f'User "{usn}" created successfully')
+            gr.Info(f'用户 "{usn}" 创建成功')
 
         return "", "", ""
 
@@ -342,7 +314,7 @@ class UserManagement(BasePage):
 
     def select_user(self, user_list, ev: gr.SelectData):
         if ev.value == "-" and ev.index[0] == 0:
-            gr.Info("No user is loaded. Please refresh the user list")
+            gr.Info("未加载用户，请刷新用户列表")
             return -1
 
         if not ev.selected:
@@ -391,7 +363,7 @@ class UserManagement(BasePage):
 
     def on_btn_delete_click(self, selected_user_id):
         if selected_user_id is None:
-            gr.Warning("No user is selected")
+            gr.Warning("未选择用户")
             btn_delete = gr.update(visible=True)
             btn_delete_yes = gr.update(visible=False)
             btn_delete_no = gr.update(visible=False)
@@ -424,7 +396,7 @@ class UserManagement(BasePage):
             existing = session.exec(statement).first()
             if existing:
                 gr.Warning(
-                    f'Username "{usn}" already exists. Please use a unique name.'
+                    f'用户名 "{usn}" 已存在，请使用唯一名称。'
                 )
                 return pwd, pwd_cnf
 
@@ -436,13 +408,13 @@ class UserManagement(BasePage):
             if pwd:
                 user.password = hashlib.sha256(pwd.encode()).hexdigest()
             session.commit()
-            gr.Info(f'User "{usn}" updated successfully')
+            gr.Info(f'用户 "{usn}" 更新成功')
 
         return "", ""
 
     def delete_user(self, current_user, selected_user_id):
         if current_user == selected_user_id:
-            gr.Warning("You cannot delete yourself")
+            gr.Warning("不能删除当前登录用户")
             return selected_user_id
 
         with Session(engine) as session:
@@ -450,5 +422,5 @@ class UserManagement(BasePage):
             user = session.exec(statement).one()
             session.delete(user)
             session.commit()
-            gr.Info(f'User "{user.username}" deleted successfully')
+            gr.Info(f'用户 "{user.username}" 删除成功')
         return -1

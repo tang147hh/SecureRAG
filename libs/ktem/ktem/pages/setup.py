@@ -16,9 +16,8 @@ if DEFAULT_OLLAMA_URL.endswith("/"):
 
 
 DEMO_MESSAGE = (
-    "This is a public space. Please use the "
-    '"Duplicate Space" function on the top right '
-    "corner to setup your own space."
+    "这是公共 Space。请使用右上角的 "
+    '"Duplicate Space" 功能创建你自己的 Space。'
 )
 
 
@@ -55,20 +54,20 @@ class SetupPage(BasePage):
         self.on_building_ui()
 
     def on_building_ui(self):
-        gr.Markdown(f"# Welcome to {self._app.app_name} first setup!")
+        gr.Markdown(f"# 欢迎进行 {self._app.app_name} 首次设置!")
         self.radio_model = gr.Radio(
             [
-                ("Cohere API (*free registration*) - recommended", "cohere"),
-                ("Google API (*free registration*)", "google"),
-                ("OpenAI API (for GPT-based models)", "openai"),
-                ("Local LLM (for completely *private RAG*)", "ollama"),
+                ("Cohere API（免费注册）- 推荐", "cohere"),
+                ("Google API（免费注册）", "google"),
+                ("OpenAI API（适用于 GPT-based models）", "openai"),
+                ("Local LLM（用于完全私有的 RAG）", "ollama"),
             ],
-            label="Select your model provider",
+            label="选择模型提供方",
             value="cohere",
             info=(
-                "Note: You can change this later. "
-                "If you are not sure, go with the first option "
-                "which fits most normal users."
+                "注意：之后可以再修改。"
+                "如果不确定，请选择第一个选项，"
+                "它适合大多数普通用户。"
             ),
             interactive=True,
         )
@@ -77,7 +76,7 @@ class SetupPage(BasePage):
             gr.Markdown(
                 (
                     "#### OpenAI API Key\n\n"
-                    "(create at https://platform.openai.com/api-keys)"
+                    "(在 https://platform.openai.com/api-keys 创建)"
                 )
             )
             self.openai_api_key = gr.Textbox(
@@ -88,8 +87,8 @@ class SetupPage(BasePage):
             gr.Markdown(
                 (
                     "#### Cohere API Key\n\n"
-                    "(register your free API key "
-                    "at https://dashboard.cohere.com/api-keys)"
+                    "(在 https://dashboard.cohere.com/api-keys "
+                    "注册免费的 API Key)"
                 )
             )
             self.cohere_api_key = gr.Textbox(
@@ -100,8 +99,8 @@ class SetupPage(BasePage):
             gr.Markdown(
                 (
                     "#### Google API Key\n\n"
-                    "(register your free API key "
-                    "at https://aistudio.google.com/app/apikey)"
+                    "(在 https://aistudio.google.com/app/apikey "
+                    "注册免费的 API Key)"
                 )
             )
             self.google_api_key = gr.Textbox(
@@ -111,18 +110,18 @@ class SetupPage(BasePage):
         with gr.Column(visible=False) as self.ollama_option:
             gr.Markdown(
                 (
-                    "#### Setup Ollama\n\n"
-                    "Download and install Ollama from "
-                    "https://ollama.com/. Check out latest models at "
+                    "#### 设置 Ollama\n\n"
+                    "请从 https://ollama.com/ 下载并安装 Ollama。"
+                    "可在以下地址查看最新 models："
                     "https://ollama.com/library. "
                 )
             )
             self.ollama_model_name = gr.Textbox(
-                label="LLM model name",
+                label="LLM model 名称",
                 value=config("LOCAL_MODEL", default="qwen2.5:7b"),
             )
             self.ollama_emb_model_name = gr.Textbox(
-                label="Embedding model name",
+                label="Embedding model 名称",
                 value=config("LOCAL_MODEL_EMBEDDINGS", default="nomic-embed-text"),
             )
 
@@ -131,9 +130,9 @@ class SetupPage(BasePage):
         )
 
         with gr.Row():
-            self.btn_finish = gr.Button("Proceed", variant="primary")
+            self.btn_finish = gr.Button("继续", variant="primary")
             self.btn_skip = gr.Button(
-                "I am an advance user. Skip this.", variant="stop"
+                "我是高级用户，跳过此步骤。", variant="stop"
             )
 
     def on_register_events(self):
@@ -197,7 +196,7 @@ class SetupPage(BasePage):
     ):
         log_content = ""
         if not radio_model_value:
-            gr.Info("Skip setup models.")
+            gr.Info("已跳过 models 设置。")
             yield gr.value(visible=False)
             return
 
@@ -304,7 +303,7 @@ class SetupPage(BasePage):
 
             try:
                 for model_name in [emb_model_name, llm_model_name]:
-                    log_content += f"- Downloading model `{model_name}` from Ollama<br>"
+                    log_content += f"- 正在从 Ollama 下载 model `{model_name}`<br>"
                     yield log_content
 
                     pre_download_log = log_content
@@ -325,69 +324,69 @@ class SetupPage(BasePage):
                         yield log_content
             except Exception as e:
                 log_content += (
-                    "Make sure you have download and installed Ollama correctly. "
-                    f"Got error: {str(e)}"
+                    "请确认已正确下载并安装 Ollama。"
+                    f"错误信息：{str(e)}"
                 )
                 yield log_content
-                raise gr.Error("Failed to download model from Ollama.")
+                raise gr.Error("从 Ollama 下载 model 失败。")
 
         # test models connection
         llm_output = emb_output = None
 
         # LLM model
-        log_content += f"- Testing LLM model: {radio_model_value}<br>"
+        log_content += f"- 正在测试 LLM model：{radio_model_value}<br>"
         yield log_content
 
         llm = llms.get(radio_model_value)  # type: ignore
-        log_content += "- Sending a message `Hi`<br>"
+        log_content += "- 正在发送消息 `Hi`<br>"
         yield log_content
         try:
             llm_output = llm("Hi")
         except Exception as e:
             log_content += (
-                f"<mark style='color: yellow; background: red'>- Connection failed. "
-                f"Got error:\n {str(e)}</mark>"
+                f"<mark style='color: yellow; background: red'>- 连接失败。"
+                f"错误信息：\n {str(e)}</mark>"
             )
 
         if llm_output:
             log_content += (
-                "<mark style='background: green; color: white'>- Connection success. "
+                "<mark style='background: green; color: white'>- 连接成功。"
                 "</mark><br>"
             )
         yield log_content
 
         if llm_output:
             # embedding model
-            log_content += f"- Testing Embedding model: {radio_model_value}<br>"
+            log_content += f"- 正在测试 Embedding model：{radio_model_value}<br>"
             yield log_content
 
             emb = embeddings.get(radio_model_value)
             assert emb, f"Embedding model {radio_model_value} not found."
 
-            log_content += "- Sending a message `Hi`<br>"
+            log_content += "- 正在发送消息 `Hi`<br>"
             yield log_content
             try:
                 emb_output = emb("Hi")
             except Exception as e:
                 log_content += (
                     f"<mark style='color: yellow; background: red'>"
-                    "- Connection failed. "
-                    f"Got error:\n {str(e)}</mark>"
+                    "- 连接失败。"
+                    f"错误信息：\n {str(e)}</mark>"
                 )
 
             if emb_output:
                 log_content += (
                     "<mark style='background: green; color: white'>"
-                    "- Connection success. "
+                    "- 连接成功。"
                     "</mark><br>"
                 )
             yield log_content
 
         if llm_output and emb_output:
-            gr.Info("Setup models completed successfully!")
+            gr.Info("models 设置完成！")
         else:
             raise gr.Error(
-                "Setup models failed. Please verify your connection and API key."
+                "models 设置失败，请检查连接和 API Key。"
             )
 
     def update_default_settings(self, radio_model_value, default_settings):

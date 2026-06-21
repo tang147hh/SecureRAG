@@ -229,7 +229,7 @@ class FullQAPipeline(BaseReasoning):
         citation_plot_output = self.prepare_citation_viz(answer, question, docs)
 
         if not with_citation and not without_citation:
-            yield Document(channel="info", content="<h5><b>No evidence found.</b></h5>")
+            yield Document(channel="info", content="<h5><b>未找到依据。</b></h5>")
         else:
             # clear the Info panel
             max_llm_rerank_score = max(
@@ -252,8 +252,8 @@ class FullQAPipeline(BaseReasoning):
                 yield Document(
                     channel="info",
                     content=(
-                        "<h5>WARNING! Context relevance score is low. "
-                        "Double check the model answer for correctness.</h5>"
+                        "<h5>警告！上下文相关性分数较低。"
+                        "请仔细检查 model 回答是否正确。</h5>"
                     ),
                 )
 
@@ -266,7 +266,7 @@ class FullQAPipeline(BaseReasoning):
             if qa_score:
                 yield Document(
                     channel="info",
-                    content=f"<h5>Answer confidence: {qa_score}</h5>",
+                    content=f"<h5>回答置信度：{qa_score}</h5>",
                 )
 
             yield from with_citation
@@ -399,7 +399,7 @@ class FullQAPipeline(BaseReasoning):
         from ktem.llms.manager import llms
 
         llm = ""
-        choices = [("(default)", "")]
+        choices = [("(默认)", "")]
         try:
             choices += [(_, _) for _ in llms.options().keys()]
         except Exception as e:
@@ -413,12 +413,12 @@ class FullQAPipeline(BaseReasoning):
                 "choices": choices,
                 "special_type": "llm",
                 "info": (
-                    "The language model to use for generating the answer. If None, "
-                    "the application default language model will be used."
+                    "用于生成回答的 language model。如果为空，"
+                    "将使用应用默认 language model。"
                 ),
             },
             "highlight_citation": {
-                "name": "Citation style",
+                "name": "Citation 样式",
                 "value": (
                     "highlight"
                     if not config("USE_LOW_LLM_REQUESTS", default=False, cast=bool)
@@ -426,23 +426,23 @@ class FullQAPipeline(BaseReasoning):
                 ),
                 "component": "radio",
                 "choices": [
-                    ("citation: highlight", "highlight"),
-                    ("citation: inline", "inline"),
-                    ("no citation", "off"),
+                    ("citation：高亮", "highlight"),
+                    ("citation：内联", "inline"),
+                    ("无 citation", "off"),
                 ],
             },
             "create_mindmap": {
-                "name": "Create Mindmap",
+                "name": "创建 Mindmap",
                 "value": False,
                 "component": "checkbox",
             },
             "create_citation_viz": {
-                "name": "Create Embeddings Visualization",
+                "name": "创建 Embeddings 可视化",
                 "value": False,
                 "component": "checkbox",
             },
             "use_multimodal": {
-                "name": "Use Multimodal Input",
+                "name": "使用 Multimodal 输入",
                 "value": False,
                 "component": "checkbox",
             },
@@ -455,18 +455,18 @@ class FullQAPipeline(BaseReasoning):
                 "value": DEFAULT_QA_TEXT_PROMPT,
             },
             "n_last_interactions": {
-                "name": "Number of interactions to include",
+                "name": "包含的交互数量",
                 "value": 5,
                 "component": "number",
-                "info": "The maximum number of chat interactions to include in the LLM",
+                "info": "传入 LLM 的最大聊天交互数量",
             },
             "trigger_context": {
-                "name": "Maximum message length for context rewriting",
+                "name": "触发上下文重写的最大消息长度",
                 "value": 150,
                 "component": "number",
                 "info": (
-                    "The maximum length of the message to trigger context addition. "
-                    "Exceeding this length, the message will be used as is."
+                    "触发上下文补充的消息最大长度。"
+                    "超过该长度时，消息将按原样使用。"
                 ),
             },
         }
@@ -492,8 +492,8 @@ class FullDecomposeQAPipeline(FullQAPipeline):
         for idx, message in enumerate(messages):
             yield Document(
                 channel="chat",
-                content=f"<br><b>Sub-question {idx + 1}</b>"
-                f"<br>{message}<br><b>Answer</b><br>",
+                content=f"<br><b>子问题 {idx + 1}</b>"
+                f"<br>{message}<br><b>回答</b><br>",
             )
             # should populate the context
             docs, infos = self.retrieve(message, history)
@@ -513,7 +513,7 @@ class FullDecomposeQAPipeline(FullQAPipeline):
             )
 
             output_str += (
-                f"Sub-question {idx + 1}-th: '{message}'\nAnswer: '{answer.text}'\n\n"
+                f"子问题 {idx + 1}: '{message}'\n回答：'{answer.text}'\n\n"
             )
 
         return output_str
@@ -535,7 +535,7 @@ class FullDecomposeQAPipeline(FullQAPipeline):
             ):
                 yield Document(
                     channel="chat",
-                    content="<h4>Sub questions and their answers</h4>",
+                    content="<h4>子问题及其回答</h4>",
                 )
                 sub_question_answer_output = yield from self.answer_sub_questions(
                     [r.text for r in result], conv_id, history, **kwargs
@@ -543,7 +543,7 @@ class FullDecomposeQAPipeline(FullQAPipeline):
 
         yield Document(
             channel="chat",
-            content=f"<h4>Main question</h4>{message}<br><b>Answer</b><br>",
+            content=f"<h4>主问题</h4>{message}<br><b>回答</b><br>",
         )
 
         # should populate the context
@@ -567,7 +567,7 @@ class FullDecomposeQAPipeline(FullQAPipeline):
             answer, docs
         )
         if not with_citation and not without_citation:
-            yield Document(channel="info", content="<h5><b>No evidence found.</b></h5>")
+            yield Document(channel="info", content="<h5><b>未找到依据。</b></h5>")
         else:
             yield Document(channel="info", content=None)
             yield from with_citation

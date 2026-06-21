@@ -58,22 +58,21 @@ class HelpPage:
                 f"{self.remote_content_url}/v{self.app_version}/docs/about.md"
             )
         if about_md:
-            with gr.Accordion("About"):
+            with gr.Accordion("关于"):
                 if self.app_version:
-                    about_md = f"Version: {self.app_version}\n\n{about_md}"
+                    about_md = f"版本：{self.app_version}\n\n{about_md}"
                 gr.Markdown(about_md)
 
         if KH_DEMO_MODE:
-            with gr.Accordion("Create Your Own Space"):
+            with gr.Accordion("创建你自己的 Space"):
                 gr.Markdown(
-                    "This is a demo with limited functionality. "
-                    "Use **Create space** button to install Kotaemon "
-                    "in your own space with all features "
-                    "(including upload and manage your private "
-                    "documents securely)."
+                    "这是功能受限的 demo。"
+                    "使用 **Create space** 按钮将 Kotaemon "
+                    "安装到你自己的 Space，以使用全部功能"
+                    "（包括安全上传和管理你的私有文档）。"
                 )
                 gr.Button(
-                    value="Create Your Own Space",
+                    value="创建你自己的 Space",
                     link=HF_SPACE_URL,
                     variant="primary",
                     size="lg",
@@ -88,7 +87,7 @@ class HelpPage:
                 f"{self.remote_content_url}/v{self.app_version}/docs/usage.md"
             )
         if user_guide_md:
-            with gr.Accordion("User Guide", open=not KH_DEMO_MODE):
+            with gr.Accordion("用户指南", open=not KH_DEMO_MODE):
                 gr.Markdown(user_guide_md)
 
         if self.app_version:
@@ -115,5 +114,5 @@ class HelpPage:
                     fi.write(changelogs)
 
             if changelogs:
-                with gr.Accordion(f"Changelogs (v{self.app_version})"):
+                with gr.Accordion(f"Changelogs（v{self.app_version}）"):
                     gr.Markdown(changelogs)

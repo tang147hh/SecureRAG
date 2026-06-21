@@ -48,12 +48,12 @@ class App(BaseApp):
                 from ktem.pages.login import LoginPage
 
                 with gr.Tab(
-                    "Welcome", elem_id="login-tab", id="login-tab"
+                    "欢迎", elem_id="login-tab", id="login-tab"
                 ) as self._tabs["login-tab"]:
                     self.login_page = LoginPage(self)
 
             with gr.Tab(
-                "Chat",
+                "聊天",
                 elem_id="chat-tab",
                 id="chat-tab",
                 visible=not self.f_user_management,
@@ -77,7 +77,7 @@ class App(BaseApp):
                         setattr(self, f"_index_{index.id}", page)
             elif len(self.index_manager.indices) > 1:
                 with gr.Tab(
-                    "Files",
+                    "文件",
                     elem_id="indices-tab",
                     elem_classes=["fill-main-area-height", "scrollable", "indices-tab"],
                     id="indices-tab",
@@ -94,7 +94,7 @@ class App(BaseApp):
             if not KH_DEMO_MODE:
                 if not KH_SSO_ENABLED:
                     with gr.Tab(
-                        "Resources",
+                        "资源",
                         elem_id="resources-tab",
                         id="resources-tab",
                         visible=not self.f_user_management,
@@ -103,7 +103,7 @@ class App(BaseApp):
                         self.resources_page = ResourcesTab(self)
 
                 with gr.Tab(
-                    "Settings",
+                    "设置",
                     elem_id="settings-tab",
                     id="settings-tab",
                     visible=not self.f_user_management,
@@ -112,7 +112,7 @@ class App(BaseApp):
                     self.settings_page = SettingsPage(self)
 
             with gr.Tab(
-                "Help",
+                "帮助",
                 elem_id="help-tab",
                 id="help-tab",
                 visible=not self.f_user_management,

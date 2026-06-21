@@ -13,12 +13,12 @@ class PaperListPage(BasePage):
     def on_building_ui(self):
         self.papers_state = gr.State(None)
         with gr.Accordion(
-            label="Browse popular daily papers",
+            label="浏览每日热门 papers",
             open=True,
         ) as self.accordion:
             self.examples = gr.DataFrame(
                 value=[],
-                headers=["title", "url", "upvotes"],
+                headers=["标题", "URL", "upvotes"],
                 column_widths=[60, 30, 10],
                 interactive=False,
                 elem_id="paper-suggestion",
