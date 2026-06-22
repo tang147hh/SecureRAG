@@ -5,7 +5,7 @@ SUPPORTED_LANGUAGE_MAP = {
     "es": "Spanish",
     "fr": "French",
     "de": "German",
-    "zh": "Chinese",
+    "zh": "Chinese (Simplified)",
     "ru": "Russian",
     "ar": "Arabic",
     "pt": "Portuguese",

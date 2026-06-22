@@ -236,12 +236,29 @@ class BaseChatOpenAI(ChatLLM):
     ) -> Iterator[LLMInterface]:
         client = self.prepare_client(async_version=False)
         input_messages = self.prepare_message(messages)
-        resp = self.openai_response(
-            client, messages=input_messages, stream=True, **kwargs
-        )
+        try:
+            resp = self.openai_response(
+                client,
+                messages=input_messages,
+                stream=True,
+                stream_options={"include_usage": True},
+                **kwargs,
+            )
+        except Exception:
+            resp = self.openai_response(
+                client, messages=input_messages, stream=True, **kwargs
+            )
 
         for c in resp:
             chunk = c.dict()
+            if chunk.get("usage"):
+                yield LLMInterface(
+                    content="",
+                    total_tokens=chunk["usage"].get("total_tokens", -1),
+                    prompt_tokens=chunk["usage"].get("prompt_tokens", -1),
+                    completion_tokens=chunk["usage"].get("completion_tokens", -1),
+                )
+                continue
             if not chunk["choices"]:
                 continue
             if chunk["choices"][0]["delta"]["content"] is not None:

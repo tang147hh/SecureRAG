@@ -255,14 +255,14 @@ class EmbeddingManagement(BasePage):
     def __init__(self, app):
         self._app = app
         self.spec_desc_default = (
-            "# Spec 说明\n\n请选择一个 model 查看 spec 说明。"
+            "Embedding 当前使用本地兼容接口，只需要填写名称、模型、API key 和 URL。"
         )
         self.on_building_ui()
 
     def on_building_ui(self):
         with gr.Tab(label="查看"):
             self.emb_list = gr.DataFrame(
-                headers=["名称", "vendor", "默认"],
+                headers=["名称", "类型", "默认"],
                 interactive=False,
                 column_widths=[30, 40, 30],
             )
@@ -274,43 +274,66 @@ class EmbeddingManagement(BasePage):
                         self.edit_default = gr.Checkbox(
                             label="设为默认",
                             info=(
-                                "将此 Embedding model 设为默认。其他组件未指定 "
-                                "Embedding 时，会默认使用此 Embedding。"
+                                "文档入库和检索默认使用此 Embedding。"
                             ),
                         )
                         self.edit_name = gr.Textbox(
                             label="名称",
                             info="编辑以重命名此 Embedding model。",
+                            interactive=False,
                         )
                         self.edit_vendor = gr.Dropdown(
-                            label="厂商",
+                            label="接口类型",
                             interactive=False,
                         )
                         self.edit_model = gr.Textbox(label="模型")
                         self.edit_api_key = gr.Textbox(label="API key", type="password")
                         self.edit_base_url = gr.Textbox(label="URL")
-                        self.edit_api_version = gr.Textbox(label="API version")
-                        self.edit_organization = gr.Textbox(label="Organization")
-                        self.edit_timeout = gr.Number(label="Timeout")
-                        self.edit_max_retries = gr.Number(label="Max retries")
-                        self.edit_dimensions = gr.Number(label="Dimensions")
-                        self.edit_context_length = gr.Number(label="Context length")
-                        self.edit_batch_size = gr.Number(label="Batch size")
-                        self.edit_parallel = gr.Number(label="Parallel")
-                        self.edit_user_agent = gr.Textbox(label="User agent")
-                        self.edit_normalize = gr.Checkbox(label="Normalize")
-                        self.edit_truncate = gr.Checkbox(label="Truncate")
+                        self.edit_api_version = gr.Textbox(
+                            label="API version", visible=False
+                        )
+                        self.edit_organization = gr.Textbox(
+                            label="Organization", visible=False
+                        )
+                        self.edit_timeout = gr.Number(label="Timeout", visible=False)
+                        self.edit_max_retries = gr.Number(
+                            label="Max retries", visible=False
+                        )
+                        self.edit_dimensions = gr.Number(
+                            label="Dimensions", visible=False
+                        )
+                        self.edit_context_length = gr.Number(
+                            label="Context length", visible=False
+                        )
+                        self.edit_batch_size = gr.Number(
+                            label="Batch size", visible=False
+                        )
+                        self.edit_parallel = gr.Number(
+                            label="Parallel", visible=False
+                        )
+                        self.edit_user_agent = gr.Textbox(
+                            label="User agent", visible=False
+                        )
+                        self.edit_normalize = gr.Checkbox(
+                            label="Normalize", visible=False
+                        )
+                        self.edit_truncate = gr.Checkbox(
+                            label="Truncate", visible=False
+                        )
                         self.edit_azure_ad_token = gr.Textbox(
                             label="Azure AD token",
                             type="password",
+                            visible=False,
                         )
                         self.edit_azure_ad_token_provider = gr.Textbox(
-                            label="Azure AD token provider"
+                            label="Azure AD token provider",
+                            visible=False,
                         )
                         self.edit_spec = gr.Textbox(
                             label="高级 YAML",
                             info="仅填写上方字段之外的额外参数。",
                             lines=6,
+                            visible=False,
                         )
 
                         with gr.Accordion(
@@ -347,53 +370,58 @@ class EmbeddingManagement(BasePage):
                     with gr.Column():
                         self.edit_spec_desc = gr.Markdown("# Spec 说明")
 
-        with gr.Tab(label="添加"):
+        with gr.Tab(label="添加", visible=False):
             with gr.Row():
                 with gr.Column(scale=2):
                     self.name = gr.Textbox(
                         label="名称",
-                        info=(
-                            "必须唯一且不能为空。该名称用于识别 embedding model。"
-                        ),
+                        value="ollama",
+                        info="用于在系统内识别该 Embedding，必须唯一。",
                     )
                     self.emb_choices = gr.Dropdown(
-                        label="厂商",
-                        info=(
-                            "选择 Embedding model 的 vendor。"
-                        ),
+                        label="接口类型",
+                        value="OpenAIEmbeddings",
+                        info="当前使用本地 OpenAI-compatible Embedding 接口。",
                     )
-                    self.model = gr.Textbox(label="模型")
-                    self.api_key = gr.Textbox(label="API key", type="password")
-                    self.base_url = gr.Textbox(label="URL")
-                    self.api_version = gr.Textbox(label="API version")
-                    self.organization = gr.Textbox(label="Organization")
-                    self.timeout = gr.Number(label="Timeout")
-                    self.max_retries = gr.Number(label="Max retries")
-                    self.dimensions = gr.Number(label="Dimensions")
-                    self.context_length = gr.Number(label="Context length")
-                    self.batch_size = gr.Number(label="Batch size")
-                    self.parallel = gr.Number(label="Parallel")
-                    self.user_agent = gr.Textbox(label="User agent")
-                    self.normalize = gr.Checkbox(label="Normalize")
-                    self.truncate = gr.Checkbox(label="Truncate")
+                    self.model = gr.Textbox(label="模型", value="nomic-embed-text")
+                    self.api_key = gr.Textbox(
+                        label="API key", value="ollama", type="password"
+                    )
+                    self.base_url = gr.Textbox(
+                        label="URL", value="http://localhost:11434/v1/"
+                    )
+                    self.api_version = gr.Textbox(label="API version", visible=False)
+                    self.organization = gr.Textbox(label="Organization", visible=False)
+                    self.timeout = gr.Number(label="Timeout", visible=False)
+                    self.max_retries = gr.Number(label="Max retries", visible=False)
+                    self.dimensions = gr.Number(label="Dimensions", visible=False)
+                    self.context_length = gr.Number(
+                        label="Context length", visible=False
+                    )
+                    self.batch_size = gr.Number(label="Batch size", visible=False)
+                    self.parallel = gr.Number(label="Parallel", visible=False)
+                    self.user_agent = gr.Textbox(label="User agent", visible=False)
+                    self.normalize = gr.Checkbox(label="Normalize", visible=False)
+                    self.truncate = gr.Checkbox(label="Truncate", visible=False)
                     self.azure_ad_token = gr.Textbox(
                         label="Azure AD token",
                         type="password",
+                        visible=False,
                     )
                     self.azure_ad_token_provider = gr.Textbox(
-                        label="Azure AD token provider"
+                        label="Azure AD token provider",
+                        visible=False,
                     )
                     self.spec = gr.Textbox(
                         label="高级 YAML",
                         info="仅填写上方字段之外的额外参数。",
                         lines=6,
+                        visible=False,
                     )
                     self.default = gr.Checkbox(
                         label="设为默认",
-                        info=(
-                            "将此 Embedding model 设为默认。其他组件未指定 "
-                            "Embedding 时，会默认使用此 Embedding。"
-                        ),
+                        value=True,
+                        info="其他组件未指定 Embedding 时会默认使用它。",
                     )
                     self.btn_new = gr.Button("添加", variant="primary")
 

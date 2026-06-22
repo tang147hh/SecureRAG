@@ -18,18 +18,21 @@ class EmbeddingManager:
         self._info: dict[str, dict] = {}
         self._default: str = ""
         self._vendors: list[Type] = []
+        self._allowed_names = getattr(flowsettings, "KH_ALLOWED_EMBEDDING_NAMES", None)
 
-        # populate the pool if empty
         if hasattr(flowsettings, "KH_EMBEDDINGS"):
-            with Session(engine) as sess:
-                count = sess.query(EmbeddingTable).count()
-            if not count:
-                for name, model in flowsettings.KH_EMBEDDINGS.items():
-                    self.add(
-                        name=name,
-                        spec=model["spec"],
-                        default=model.get("default", False),
-                    )
+            for name, model in flowsettings.KH_EMBEDDINGS.items():
+                with Session(engine) as session:
+                    stmt = select(EmbeddingTable).where(EmbeddingTable.name == name)
+                    result = session.execute(stmt)
+                    if not result.first():
+                        item = EmbeddingTable(
+                            name=name,
+                            spec=model["spec"],
+                            default=model.get("default", False),
+                        )
+                        session.add(item)
+                        session.commit()
 
         self.load()
         self.load_vendors()
@@ -42,6 +45,11 @@ class EmbeddingManager:
             items = sess.execute(stmt)
 
             for (item,) in items:
+                if (
+                    self._allowed_names is not None
+                    and item.name not in self._allowed_names
+                ):
+                    continue
                 self._models[item.name] = deserialize(item.spec, safe=False)
                 self._info[item.name] = {
                     "name": item.name,
@@ -53,29 +61,9 @@ class EmbeddingManager:
                     self._models["default"] = self._models[item.name]
 
     def load_vendors(self):
-        from kotaemon.embeddings import (
-            AzureOpenAIEmbeddings,
-            FastEmbedEmbeddings,
-            LCCohereEmbeddings,
-            LCGoogleEmbeddings,
-            LCHuggingFaceEmbeddings,
-            LCMistralEmbeddings,
-            OpenAIEmbeddings,
-            TeiEndpointEmbeddings,
-            VoyageAIEmbeddings,
-        )
+        from kotaemon.embeddings import OpenAIEmbeddings
 
-        self._vendors = [
-            AzureOpenAIEmbeddings,
-            OpenAIEmbeddings,
-            FastEmbedEmbeddings,
-            LCCohereEmbeddings,
-            LCHuggingFaceEmbeddings,
-            LCGoogleEmbeddings,
-            LCMistralEmbeddings,
-            TeiEndpointEmbeddings,
-            VoyageAIEmbeddings,
-        ]
+        self._vendors = [OpenAIEmbeddings]
 
     def __getitem__(self, key: str) -> BaseEmbeddings:
         """Get model by name"""

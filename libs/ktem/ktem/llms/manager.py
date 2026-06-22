@@ -18,6 +18,7 @@ class LLMManager:
         self._info: dict[str, dict] = {}
         self._default: str = ""
         self._vendors: list[Type] = []
+        self._allowed_names = getattr(flowsettings, "KH_ALLOWED_LLM_NAMES", None)
 
         if hasattr(flowsettings, "KH_LLMS"):
             for name, model in flowsettings.KH_LLMS.items():
@@ -44,6 +45,11 @@ class LLMManager:
             items = session.execute(stmt)
 
             for (item,) in items:
+                if (
+                    self._allowed_names is not None
+                    and item.name not in self._allowed_names
+                ):
+                    continue
                 self._models[item.name] = deserialize(item.spec, safe=False)
                 self._info[item.name] = {
                     "name": item.name,
@@ -54,25 +60,9 @@ class LLMManager:
                     self._default = item.name
 
     def load_vendors(self):
-        from kotaemon.llms import (
-            AzureChatOpenAI,
-            ChatOpenAI,
-            LCAnthropicChat,
-            LCCohereChat,
-            LCGeminiChat,
-            LCOllamaChat,
-            LlamaCppChat,
-        )
+        from kotaemon.llms import ChatOpenAI
 
-        self._vendors = [
-            ChatOpenAI,
-            AzureChatOpenAI,
-            LCAnthropicChat,
-            LCGeminiChat,
-            LCCohereChat,
-            LCOllamaChat,
-            LlamaCppChat,
-        ]
+        self._vendors = [ChatOpenAI]
 
         for extra_vendor in getattr(flowsettings, "KH_LLM_EXTRA_VENDORS", []):
             self._vendors.append(import_dotted_string(extra_vendor, safe=False))

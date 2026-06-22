@@ -70,6 +70,14 @@ ANSWER:
 START_ANSWER = "FINAL ANSWER"
 START_CITATION = "CITATION LIST"
 CITATION_PATTERN = r"citation【(\d+)】"
+START_ANSWER_MARKER_PATTERN = re.compile(
+    rf"^\s*{re.escape(START_ANSWER)}\s*:?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+START_CITATION_MARKER_PATTERN = re.compile(
+    rf"^\s*{re.escape(START_CITATION)}\s*:?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 START_ANSWER_PATTERN = "start_phrase:"
 END_ANSWER_PATTERN = "end_phrase:"
 
@@ -87,6 +95,19 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
     """Answer the question based on the evidence with inline citation"""
 
     qa_citation_template: str = DEFAULT_QA_CITATION_PROMPT
+
+    def extract_final_answer(self, output: str) -> str:
+        """Extract the LLM-authored final answer without changing its structure."""
+        answer_match = START_ANSWER_MARKER_PATTERN.search(output)
+        if not answer_match:
+            return output.strip()
+
+        final_answer = output[answer_match.end() :].strip()
+        citation_match = START_CITATION_MARKER_PATTERN.search(final_answer)
+        if citation_match:
+            final_answer = final_answer[: citation_match.start()].strip()
+
+        return final_answer
 
     def get_prompt(self, question, evidence, evidence_mode: int):
         """Prepare the prompt and other information for LLM"""
@@ -252,42 +273,21 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
             # append main prompt
             messages.append(HumanMessage(content=prompt))
 
-        final_answer = ""
-
         try:
             # try streaming first
             print("Trying LLM streaming")
             for out_msg in self.llm.stream(messages):
-                if evidence:
-                    if START_ANSWER in output:
-                        if not final_answer:
-                            try:
-                                left_over_answer = output.split(START_ANSWER)[
-                                    1
-                                ].lstrip()
-                            except IndexError:
-                                left_over_answer = ""
-                            if left_over_answer:
-                                out_msg.text = left_over_answer + out_msg.text
-
-                        final_answer += (
-                            out_msg.text.lstrip() if not final_answer else out_msg.text
-                        )
-                        yield Document(channel="chat", content=out_msg.text)
-
-                        # check for the edge case of citation list is repeated
-                        # with smaller LLMs
-                        if START_CITATION in out_msg.text:
-                            break
-                else:
-                    yield Document(channel="chat", content=out_msg.text)
-
                 output += out_msg.text
                 logprobs += out_msg.logprobs
+
+                if not evidence:
+                    yield Document(channel="chat", content=out_msg.text)
+
         except NotImplementedError:
             print("Streaming is not supported, falling back to normal processing")
             output = self.llm(messages).text
-            yield Document(channel="chat", content=output)
+            if not evidence:
+                yield Document(channel="chat", content=output)
 
         if logprobs:
             qa_score = np.exp(np.average(logprobs))
@@ -295,6 +295,7 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
             qa_score = None
 
         citation = self.answer_to_citations(output)
+        final_answer = self.extract_final_answer(output) if evidence else output
 
         if mindmap_thread:
             mindmap_thread.join(timeout=CITATION_TIMEOUT)
@@ -313,7 +314,7 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
         # yield the final answer
         final_answer = self.replace_citation_with_link(final_answer)
 
-        if final_answer:
+        if evidence and final_answer:
             yield Document(channel="chat", content=None)
             yield Document(channel="chat", content=final_answer)
 

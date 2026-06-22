@@ -220,6 +220,56 @@ class FullQAPipeline(BaseReasoning):
 
         return plot_content
 
+    def prepare_retrieval_diagnostics(self, answer, docs) -> Document:
+        """Summarize retrieval, citation, and token usage for the info panel."""
+        citation = answer.metadata.get("citation")
+        citation_quotes = getattr(citation, "evidences", None) or []
+        spans = self.answering_pipeline.match_evidence_with_context(answer, docs)
+        cited_doc_ids = {doc_id for doc_id, matches in spans.items() if matches}
+
+        relevance_scores = []
+        for doc in docs:
+            if doc.metadata.get("llm_trulens_score") is not None:
+                relevance_scores.append(float(doc.metadata["llm_trulens_score"]))
+            elif doc.metadata.get("reranking_score") is not None:
+                relevance_scores.append(float(doc.metadata["reranking_score"]))
+            elif not getattr(doc, "score", None) in (None, -1.0):
+                relevance_scores.append(float(doc.score))
+
+        retrieved_count = len(docs)
+        cited_count = len(cited_doc_ids)
+        citation_coverage = cited_count / retrieved_count if retrieved_count else 0.0
+        qa_score = answer.metadata.get("qa_score")
+
+        return Document(
+            channel="info",
+            content={
+                "type": "diagnostics",
+                "retrieval": {
+                    "retrieved_count": retrieved_count,
+                    "cited_doc_count": cited_count,
+                    "citation_count": len(citation_quotes),
+                    "citation_coverage": citation_coverage,
+                    "avg_relevance_score": (
+                        sum(relevance_scores) / len(relevance_scores)
+                        if relevance_scores
+                        else None
+                    ),
+                    "max_relevance_score": (
+                        max(relevance_scores) if relevance_scores else None
+                    ),
+                },
+                "answer": {
+                    "qa_score": qa_score,
+                },
+                "tokens": {
+                    "prompt_tokens": answer.metadata.get("prompt_tokens", -1),
+                    "completion_tokens": answer.metadata.get("completion_tokens", -1),
+                    "total_tokens": answer.metadata.get("total_tokens", -1),
+                },
+            },
+        )
+
     def show_citations_and_addons(self, answer, docs, question):
         # show the evidence
         with_citation, without_citation = self.answering_pipeline.prepare_citations(
@@ -229,6 +279,8 @@ class FullQAPipeline(BaseReasoning):
         citation_plot_output = self.prepare_citation_viz(answer, question, docs)
 
         if not with_citation and not without_citation:
+            yield Document(channel="info", content=None)
+            yield self.prepare_retrieval_diagnostics(answer, docs)
             yield Document(channel="info", content="<h5><b>未找到依据。</b></h5>")
         else:
             # clear the Info panel
@@ -238,6 +290,7 @@ class FullQAPipeline(BaseReasoning):
             has_llm_score = any("llm_trulens_score" in doc.metadata for doc in docs)
             # clear previous info
             yield Document(channel="info", content=None)
+            yield self.prepare_retrieval_diagnostics(answer, docs)
 
             # yield mindmap output
             if mindmap_output:

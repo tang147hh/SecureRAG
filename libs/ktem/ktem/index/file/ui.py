@@ -195,6 +195,7 @@ class FileIndexPage(BasePage):
         ]
         self.selected_panel_false = "已选文件：（请在上方选择）"
         self.selected_panel_true = "已选文件：{name}"
+        self.directory_filter_all = "__all__"
         # TODO: on_building_ui is not correctly named if it's always called in
         # the constructor
         self.public_events = [f"onFileIndex{index.id}Changed"]
@@ -226,6 +227,13 @@ class FileIndexPage(BasePage):
                 "(1) 不区分大小写。"
                 "(2) 使用空字符串搜索可显示所有文件。"
             ),
+        )
+        self.directory_filter = gr.Dropdown(
+            label="目录",
+            choices=[("全部文件", self.directory_filter_all)],
+            value=self.directory_filter_all,
+            interactive=True,
+            container=True,
         )
         self.file_list_state = gr.State(value=None)
         self.file_list = gr.DataFrame(
@@ -302,7 +310,7 @@ class FileIndexPage(BasePage):
         self.group_list = gr.DataFrame(
             headers=[
                 "id",
-                "name",
+                "directory",
                 "files",
                 "date_created",
             ],
@@ -313,7 +321,7 @@ class FileIndexPage(BasePage):
 
         with gr.Row():
             self.group_add_button = gr.Button(
-                "添加",
+                "新建目录",
                 variant="primary",
             )
             self.group_chat_button = gr.Button(
@@ -334,13 +342,13 @@ class FileIndexPage(BasePage):
             self.selected_group_id = gr.State(value=None)
             self.group_label = gr.Markdown()
             self.group_name = gr.Textbox(
-                label="分组名称",
-                placeholder="分组名称",
+                label="目录名称",
+                placeholder="目录名称，例如：合同/人事制度",
                 lines=1,
                 max_lines=1,
             )
             self.group_files = gr.Dropdown(
-                label="关联文件",
+                label="目录文件",
                 multiselect=True,
             )
             self.group_save_button = gr.Button(
@@ -401,7 +409,7 @@ class FileIndexPage(BasePage):
                 with gr.Tab("文件"):
                     self.render_file_list()
 
-                with gr.Tab("分组"):
+                with gr.Tab("目录"):
                     self.render_group_list()
 
     def on_subscribe_public_events(self):
@@ -424,7 +432,7 @@ class FileIndexPage(BasePage):
                 name="onSignIn",
                 definition={
                     "fn": self.list_file,
-                    "inputs": [self._app.user_id],
+                    "inputs": [self._app.user_id, self.filter, self.directory_filter],
                     "outputs": [self.file_list_state, self.file_list],
                     "show_progress": "hidden",
                 },
@@ -451,11 +459,21 @@ class FileIndexPage(BasePage):
                 name="onSignOut",
                 definition={
                     "fn": self.list_file,
-                    "inputs": [self._app.user_id],
+                    "inputs": [self._app.user_id, self.filter, self.directory_filter],
                     "outputs": [self.file_list_state, self.file_list],
                     "show_progress": "hidden",
                 },
             )
+            for event_name in ["onSignIn", "onSignOut"]:
+                self._app.subscribe_event(
+                    name=event_name,
+                    definition={
+                        "fn": self.list_directory_choices,
+                        "inputs": [self._app.user_id],
+                        "outputs": [self.directory_filter],
+                        "show_progress": "hidden",
+                    },
+                )
 
     def _build_chunk_panel(
         self,
@@ -701,6 +719,9 @@ class FileIndexPage(BasePage):
                 print("Setting up quick upload event")
 
                 # override indexing function from chat page
+                self._app.chat_page.first_indexing_file_fn = (
+                    self.index_fn_file_with_default_loaders
+                )
                 self._app.chat_page.first_indexing_url_fn = (
                     self.index_fn_url_with_default_loaders
                 )
@@ -752,7 +773,11 @@ class FileIndexPage(BasePage):
                         )
                         .then(
                             fn=self.list_file,
-                            inputs=[self._app.user_id, self.filter],
+                            inputs=[
+                                self._app.user_id,
+                                self.filter,
+                                self.directory_filter,
+                            ],
                             outputs=[self.file_list_state, self.file_list],
                             concurrency_limit=20,
                         )
@@ -808,7 +833,7 @@ class FileIndexPage(BasePage):
                 if not KH_DEMO_MODE:
                     quickURLUploadedEvent = quickURLUploadedEvent.then(
                         fn=self.list_file,
-                        inputs=[self._app.user_id, self.filter],
+                        inputs=[self._app.user_id, self.filter, self.directory_filter],
                         outputs=[self.file_list_state, self.file_list],
                         concurrency_limit=20,
                     )
@@ -844,7 +869,7 @@ class FileIndexPage(BasePage):
             )
             .then(
                 fn=self.list_file,
-                inputs=[self._app.user_id, self.filter],
+                inputs=[self._app.user_id, self.filter, self.directory_filter],
                 outputs=[self.file_list_state, self.file_list],
             )
             .then(
@@ -933,7 +958,7 @@ class FileIndexPage(BasePage):
             show_progress="hidden",
         ).then(
             fn=self.list_file,
-            inputs=[self._app.user_id, self.filter],
+            inputs=[self._app.user_id, self.filter, self.directory_filter],
             outputs=[self.file_list_state, self.file_list],
         ).then(
             lambda: [
@@ -989,7 +1014,7 @@ class FileIndexPage(BasePage):
 
         uploadedEvent = onUploaded.then(
             fn=self.list_file,
-            inputs=[self._app.user_id, self.filter],
+            inputs=[self._app.user_id, self.filter, self.directory_filter],
             outputs=[self.file_list_state, self.file_list],
             concurrency_limit=20,
         )
@@ -1065,7 +1090,14 @@ class FileIndexPage(BasePage):
 
         self.filter.submit(
             fn=self.list_file,
-            inputs=[self._app.user_id, self.filter],
+            inputs=[self._app.user_id, self.filter, self.directory_filter],
+            outputs=[self.file_list_state, self.file_list],
+            show_progress="hidden",
+        )
+
+        self.directory_filter.change(
+            fn=self.list_file,
+            inputs=[self._app.user_id, self.filter, self.directory_filter],
             outputs=[self.file_list_state, self.file_list],
             show_progress="hidden",
         )
@@ -1073,7 +1105,7 @@ class FileIndexPage(BasePage):
         self.group_add_button.click(
             fn=lambda: [
                 gr.update(visible=False),
-                gr.update(value="### 添加新分组"),
+                gr.update(value="### 新建目录"),
                 gr.update(visible=True),
                 gr.update(value=""),
                 gr.update(value=[]),
@@ -1133,6 +1165,11 @@ class FileIndexPage(BasePage):
                 inputs=[self._app.user_id, self.file_list_state],
                 outputs=[self.group_list_state, self.group_list],
             )
+            .then(
+                self.list_directory_choices,
+                inputs=[self._app.user_id],
+                outputs=[self.directory_filter],
+            )
             .then(**onGroupClosedEvent)
         )
         onGroupDeleted = (
@@ -1144,6 +1181,11 @@ class FileIndexPage(BasePage):
                 self.list_group,
                 inputs=[self._app.user_id, self.file_list_state],
                 outputs=[self.group_list_state, self.group_list],
+            )
+            .then(
+                self.list_directory_choices,
+                inputs=[self._app.user_id],
+                outputs=[self.directory_filter],
             )
             .then(**onGroupClosedEvent)
         )
@@ -1159,12 +1201,16 @@ class FileIndexPage(BasePage):
 
         self._app.app.load(
             self.list_file,
-            inputs=[self._app.user_id, self.filter],
+            inputs=[self._app.user_id, self.filter, self.directory_filter],
             outputs=[self.file_list_state, self.file_list],
         ).then(
             self.list_group,
             inputs=[self._app.user_id, self.file_list_state],
             outputs=[self.group_list_state, self.group_list],
+        ).then(
+            self.list_directory_choices,
+            inputs=[self._app.user_id],
+            outputs=[self.directory_filter],
         ).then(
             self.list_file_names,
             inputs=[self.file_list_state],
@@ -1288,8 +1334,9 @@ class FileIndexPage(BasePage):
             settings: the settings of the app
         """
         print("Overriding with default loaders")
-        exist_ids = []
+        ordered_ids: list[str | None] = []
         to_process_files = []
+        to_process_indices = []
         for str_file_path in files:
             file_path = Path(str(str_file_path))
             exist_id = (
@@ -1298,11 +1345,12 @@ class FileIndexPage(BasePage):
                 .get_id_if_exists(file_path)
             )
             if exist_id:
-                exist_ids.append(exist_id)
+                ordered_ids.append(exist_id)
             else:
+                ordered_ids.append(None)
+                to_process_indices.append(len(ordered_ids) - 1)
                 to_process_files.append(str_file_path)
 
-        returned_ids = []
         settings = deepcopy(settings)
         settings[f"index.options.{self._index.id}.reader_mode"] = "default"
         settings[f"index.options.{self._index.id}.quick_index_mode"] = True
@@ -1312,9 +1360,10 @@ class FileIndexPage(BasePage):
                 while next(_iter):
                     pass
             except StopIteration as e:
-                returned_ids = e.value
+                for idx, returned_id in zip(to_process_indices, e.value):
+                    ordered_ids[idx] = returned_id
 
-        return exist_ids + returned_ids
+        return ordered_ids
 
     def index_fn_url_with_default_loaders(
         self,
@@ -1465,7 +1514,7 @@ class FileIndexPage(BasePage):
             num /= 1024.0
         return f"{num:.0f}Yi{suffix}"
 
-    def list_file(self, user_id, name_pattern=""):
+    def list_file(self, user_id, name_pattern="", directory_id=None):
         if user_id is None:
             # not signed in
             return [], pd.DataFrame.from_records(
@@ -1482,6 +1531,7 @@ class FileIndexPage(BasePage):
             )
 
         Source = self._index._resources["Source"]
+        directory_file_ids = self.get_directory_file_ids(directory_id)
         name_pattern = name_pattern.strip()
         if name_pattern:
             # Escape SQL LIKE metacharacters so user input is literal substring
@@ -1494,6 +1544,21 @@ class FileIndexPage(BasePage):
             statement = select(Source)
             if self._index.config.get("private", False):
                 statement = statement.where(Source.user == user_id)
+            if directory_file_ids is not None:
+                if not directory_file_ids:
+                    return [], pd.DataFrame.from_records(
+                        [
+                            {
+                                "id": "-",
+                                "name": "-",
+                                "size": "-",
+                                "tokens": "-",
+                                "loader": "-",
+                                "date_created": "-",
+                            }
+                        ]
+                    )
+                statement = statement.where(Source.id.in_(directory_file_ids))
             if name_pattern:
                 statement = statement.where(
                     Source.name.ilike(f"%{like_escape}%", escape="\\")
@@ -1538,6 +1603,34 @@ class FileIndexPage(BasePage):
 
         return gr.update(choices=file_names)
 
+    def get_directory_file_ids(self, directory_id):
+        if not directory_id or directory_id == self.directory_filter_all:
+            return None
+
+        FileGroup = self._index._resources["FileGroup"]
+        with Session(engine) as session:
+            current_group = (
+                session.query(FileGroup).filter_by(id=directory_id).first()
+            )
+        if not current_group:
+            return []
+        return current_group.data.get("files", [])
+
+    def list_directory_choices(self, user_id):
+        choices = [("全部文件", self.directory_filter_all)]
+        if user_id is None:
+            return gr.update(choices=choices, value=self.directory_filter_all)
+
+        FileGroup = self._index._resources["FileGroup"]
+        with Session(engine) as session:
+            statement = select(FileGroup)
+            if self._index.config.get("private", False):
+                statement = statement.where(FileGroup.user == user_id)
+            results = session.execute(statement).all()
+
+        choices.extend((each[0].name, each[0].id) for each in results)
+        return gr.update(choices=choices, value=self.directory_filter_all)
+
     def list_group(self, user_id, file_list):
         # supply file_list to display the file names in the group
         if file_list:
@@ -1551,7 +1644,7 @@ class FileIndexPage(BasePage):
                 [
                     {
                         "id": "-",
-                        "name": "-",
+                        "directory": "-",
                         "files": "-",
                         "date_created": "-",
                     }
@@ -1567,7 +1660,7 @@ class FileIndexPage(BasePage):
             results = [
                 {
                     "id": each[0].id,
-                    "name": each[0].name,
+                    "directory": each[0].name,
                     "files": each[0].data.get("files", []),
                     "date_created": each[0].date_created.strftime("%Y-%m-%d %H:%M:%S"),
                 }
@@ -1596,7 +1689,7 @@ class FileIndexPage(BasePage):
                 [
                     {
                         "id": "-",
-                        "name": "-",
+                        "directory": "-",
                         "files": "-",
                         "date_created": "-",
                     }
@@ -1618,6 +1711,11 @@ class FileIndexPage(BasePage):
         return [file_ids, "select", gr.Tabs(selected="chat-tab")]
 
     def save_group(self, group_id, group_name, group_files, user_id):
+        group_name = (group_name or "").strip()
+        group_files = group_files or []
+        if not group_name:
+            raise gr.Error("目录名称不能为空")
+
         FileGroup = self._index._resources["FileGroup"]
         current_group = None
 
@@ -1639,7 +1737,7 @@ class FileIndexPage(BasePage):
                     .first()
                 )
                 if current_group:
-                    raise gr.Error(f"分组 {group_name} 已存在")
+                    raise gr.Error(f"目录 {group_name} 已存在")
 
                 current_group = FileGroup(
                     name=group_name,
@@ -1651,12 +1749,12 @@ class FileIndexPage(BasePage):
 
             group_id = current_group.id
 
-        gr.Info(f"分组 {group_name} 已保存")
+        gr.Info(f"目录 {group_name} 已保存")
         return group_id
 
     def delete_group(self, group_id):
         if not group_id:
-            raise gr.Error("未选择分组")
+            raise gr.Error("未选择目录")
 
         FileGroup = self._index._resources["FileGroup"]
         with Session(engine) as session:
@@ -1668,9 +1766,9 @@ class FileIndexPage(BasePage):
                 group_name = item.name
                 session.delete(item)
                 session.commit()
-                gr.Info(f"分组 {group_name} 已删除")
+                gr.Info(f"目录 {group_name} 已删除")
             else:
-                raise gr.Error("未找到分组")
+                raise gr.Error("未找到目录")
 
         return None
 
@@ -1689,14 +1787,14 @@ class FileIndexPage(BasePage):
     def interact_group_list(self, list_groups, ev: gr.SelectData):
         selected_id = ev.index[0]
         if (not ev.value or ev.value == "-") and selected_id == 0:
-            raise gr.Error("未选择分组")
+            raise gr.Error("未选择目录")
 
         selected_item = list_groups[selected_id]
         selected_group_id = selected_item["id"]
         return (
-            "### 分组信息",
+            "### 目录信息",
             selected_group_id,
-            selected_item["name"],
+            selected_item["directory"],
             selected_item["files"],
         )
 
@@ -1748,8 +1846,8 @@ class FileSelector(BasePage):
 
     def default(self):
         if self._app.f_user_management:
-            return "disabled", [], -1
-        return "disabled", [], 1
+            return "all", [], -1
+        return "all", [], 1
 
     def on_building_ui(self):
         default_mode, default_selector, user_id = self.default()
@@ -1795,6 +1893,26 @@ class FileSelector(BasePage):
     def as_gradio_component(self):
         return [self.mode, self.selector, self.selector_user_id]
 
+    @staticmethod
+    def _flatten_selected_ids(selected) -> list[str]:
+        selected_ids = []
+        for item in selected or []:
+            if not item:
+                continue
+            if isinstance(item, list):
+                selected_ids.extend(str(file_id) for file_id in item if file_id)
+                continue
+            if isinstance(item, str) and item.startswith("["):
+                try:
+                    selected_ids.extend(
+                        str(file_id) for file_id in json.loads(item) if file_id
+                    )
+                    continue
+                except json.JSONDecodeError:
+                    pass
+            selected_ids.append(str(item))
+        return selected_ids
+
     def get_selected_ids(self, components):
         mode, selected, user_id = components[0], components[1], components[2]
         if user_id is None:
@@ -1803,7 +1921,7 @@ class FileSelector(BasePage):
         if mode == "disabled":
             return []
         elif mode == "select":
-            return selected
+            return self._flatten_selected_ids(selected)
 
         file_ids = []
         with Session(engine) as session:
@@ -1851,11 +1969,12 @@ class FileSelector(BasePage):
             for result in results:
                 item = result[0]
                 options.append(
-                    (f"group: '{item.name}'", json.dumps(item.data.get("files", [])))
+                    (f"目录: {item.name}", json.dumps(item.data.get("files", [])))
                 )
 
         if selected_files:
             available_ids_set = set(available_ids)
+            selected_files = self._flatten_selected_ids(selected_files)
             selected_files = [
                 each for each in selected_files if each in available_ids_set
             ]

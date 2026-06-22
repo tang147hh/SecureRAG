@@ -1,7 +1,9 @@
 import asyncio
 import json
+import os
 import re
 from copy import deepcopy
+from pathlib import Path
 from typing import Optional
 
 import gradio as gr
@@ -62,6 +64,22 @@ DEFAULT_QUESTION = (
     if not KH_DEMO_MODE
     else "这篇 paper 的摘要是什么？"
 )
+DEFAULT_PROMPT_TEMPLATE_NAME = "默认 RAG"
+DEFAULT_PROMPT_TEMPLATE_TEXT = (
+    "You are a careful RAG assistant. Answer in {lang} using only the provided "
+    "context when context is available. If the context is insufficient, say what "
+    "is missing and avoid inventing facts.\n\n"
+    "Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+)
+DEFAULT_PROMPT_TEMPLATES = {
+    DEFAULT_PROMPT_TEMPLATE_NAME: DEFAULT_PROMPT_TEMPLATE_TEXT,
+    "严格引用": (
+        "Answer in {lang}. Base the answer strictly on the context below. "
+        "When the context does not contain the answer, say that the documents do "
+        "not provide enough information.\n\nContext:\n{context}\n\nQuestion: "
+        "{question}\nAnswer:"
+    ),
+}
 
 chat_input_focus_js = """
 function() {
@@ -229,33 +247,29 @@ class ChatPage(BasePage):
             self.first_selector_choices = gr.State(None)
 
             with gr.Column(scale=1, elem_id="conv-settings-panel") as self.conv_column:
-                self.chat_control = ConversationControl(self._app)
+                with gr.Accordion(
+                    label="会话",
+                    open=True,
+                    elem_id="conversation-control-expand",
+                ):
+                    self.chat_control = ConversationControl(self._app)
 
-                for index_id, index in enumerate(self._app.index_manager.indices):
-                    index.selector = None
-                    index_ui = index.get_selector_component_ui()
-                    if not index_ui:
-                        # the index doesn't have a selector UI component
-                        continue
+                with gr.Column(visible=False, elem_id="archived-index-selectors"):
+                    for index_id, index in enumerate(self._app.index_manager.indices):
+                        index.selector = None
+                        index_ui = index.get_selector_component_ui()
+                        if not index_ui:
+                            # the index doesn't have a selector UI component
+                            continue
 
-                    index_ui.unrender()  # need to rerender later within Accordion
-                    is_first_index = index_id == 0
-                    index_name = index.name
-
-                    if KH_DEMO_MODE and is_first_index:
-                        index_name = "从 Paper Collection 中选择"
-
-                    with gr.Accordion(
-                        label=index_name,
-                        open=is_first_index,
-                        elem_id=f"index-{index_id}",
-                    ):
+                        index_ui.unrender()
                         index_ui.render()
                         gr_index = index_ui.as_gradio_component()
 
                         # get the file selector choices for the first index
                         if index_id == 0:
                             self.first_selector_choices = index_ui.selector_choices
+                            self.first_indexing_file_fn = None
                             self.first_indexing_url_fn = None
 
                         if gr_index:
@@ -281,7 +295,7 @@ class ChatPage(BasePage):
                         "快速上传" if not KH_DEMO_MODE else "或输入新的 paper URL"
                     )
 
-                    with gr.Accordion(label=quick_upload_label) as _:
+                    with gr.Accordion(label=quick_upload_label, open=False) as _:
                         self.quick_file_upload_status = gr.Markdown()
                         if not KH_DEMO_MODE:
                             self.quick_file_upload = File(
@@ -305,34 +319,13 @@ class ChatPage(BasePage):
                             ),
                         )
 
-                if not KH_DEMO_MODE:
-                    self.report_issue = ReportIssue(self._app)
-                else:
-                    with gr.Accordion(label="相关 papers", open=False):
-                        self.related_papers = gr.Markdown(elem_id="related-papers")
-
-                    self.hint_page = HintPage(self._app)
-
-            with gr.Column(scale=6, elem_id="chat-area"):
-                if KH_DEMO_MODE:
-                    self.paper_list = PaperListPage(self._app)
-
-                self.chat_panel = ChatPanel(self._app)
-
                 with gr.Accordion(
                     label="聊天设置",
                     elem_id="chat-settings-expand",
-                    open=False,
+                    open=True,
                     visible=not KH_DEMO_MODE,
                 ) as self.chat_settings:
-                    with gr.Row(elem_id="quick-setting-labels"):
-                        gr.HTML("Reasoning 方法")
-                        gr.HTML(
-                            "Model", visible=not KH_DEMO_MODE and not KH_SSO_ENABLED
-                        )
-                        gr.HTML("语言")
-
-                    with gr.Row():
+                    with gr.Column():
                         reasoning_setting = (
                             self._app.default_settings.reasoning.settings["use"]
                         )
@@ -349,28 +342,28 @@ class ChatPage(BasePage):
                         self.reasoning_type = gr.Dropdown(
                             choices=reasoning_setting.choices[:REASONING_LIMITS],
                             value=reasoning_setting.value,
-                            container=False,
-                            show_label=False,
+                            label="Reasoning 方法",
+                            container=True,
                         )
                         self.model_type = gr.Dropdown(
                             choices=model_setting.choices,
                             value=model_setting.value,
-                            container=False,
-                            show_label=False,
+                            label="Model",
+                            container=True,
                             visible=not KH_DEMO_MODE and not KH_SSO_ENABLED,
                         )
                         self.language = gr.Dropdown(
                             choices=language_setting.choices,
                             value=language_setting.value,
-                            container=False,
-                            show_label=False,
+                            label="语言",
+                            container=True,
                         )
 
                         self.citation = gr.Dropdown(
                             choices=citation_setting.choices,
                             value=citation_setting.value,
-                            container=False,
-                            show_label=False,
+                            label="引用高亮",
+                            container=True,
                             interactive=True,
                             elem_id="citation-dropdown",
                         )
@@ -379,7 +372,7 @@ class ChatPage(BasePage):
                             self.use_mindmap = gr.State(value=True)
                             self.use_mindmap_check = gr.Checkbox(
                                 label="Mindmap（开）",
-                                container=False,
+                                container=True,
                                 elem_id="use-mindmap-checkbox",
                                 value=True,
                             )
@@ -387,10 +380,109 @@ class ChatPage(BasePage):
                             self.use_mindmap = gr.State(value=False)
                             self.use_mindmap_check = gr.Checkbox(
                                 label="Mindmap（关）",
-                                container=False,
+                                container=True,
                                 elem_id="use-mindmap-checkbox",
                                 value=False,
                             )
+
+                    with gr.Accordion("检索参数", open=True):
+                        with gr.Row():
+                            self.retrieval_top_k = gr.Slider(
+                                minimum=1,
+                                maximum=30,
+                                step=1,
+                                value=10,
+                                label="top_k",
+                                info="最终传给回答模型的片段数量。",
+                            )
+                            self.first_round_multiplier = gr.Slider(
+                                minimum=1,
+                                maximum=20,
+                                step=1,
+                                value=10,
+                                label="召回倍数",
+                                info="第一轮候选数量 = top_k x 召回倍数。",
+                            )
+                        with gr.Row():
+                            self.retrieval_mode = gr.Radio(
+                                choices=[
+                                    ("Hybrid", "hybrid"),
+                                    ("Vector", "vector"),
+                                    ("Text", "text"),
+                                ],
+                                value="hybrid",
+                                label="召回方式",
+                            )
+                            self.use_reranking = gr.Checkbox(
+                                value=False,
+                                label="启用 rerank",
+                                container=True,
+                            )
+                        with gr.Row():
+                            self.use_llm_reranking = gr.Checkbox(
+                                value=False,
+                                label="LLM 相关性评分",
+                                container=True,
+                            )
+                            self.use_mmr = gr.Checkbox(
+                                value=False,
+                                label="MMR 多样性召回",
+                                container=True,
+                            )
+                            self.prioritize_table = gr.Checkbox(
+                                value=False,
+                                label="补充同页表格",
+                                container=True,
+                            )
+
+                    with gr.Accordion("提示词模板", open=True):
+                        self.prompt_templates_state = gr.State(
+                            value=deepcopy(DEFAULT_PROMPT_TEMPLATES)
+                        )
+                        with gr.Row():
+                            self.prompt_template_select = gr.Dropdown(
+                                label="模板",
+                                choices=list(DEFAULT_PROMPT_TEMPLATES.keys()),
+                                value=DEFAULT_PROMPT_TEMPLATE_NAME,
+                                interactive=True,
+                            )
+                            self.prompt_template_name = gr.Textbox(
+                                label="模板名称",
+                                value=DEFAULT_PROMPT_TEMPLATE_NAME,
+                                lines=1,
+                                max_lines=1,
+                            )
+                        self.prompt_template_text = gr.Textbox(
+                            label="QA Prompt",
+                            value=DEFAULT_PROMPT_TEMPLATE_TEXT,
+                            lines=8,
+                            max_lines=18,
+                            info="可使用 {context}、{question}、{lang}。",
+                        )
+                        with gr.Row():
+                            self.prompt_template_save = gr.Button(
+                                "保存模板",
+                                variant="primary",
+                            )
+                            self.prompt_template_delete = gr.Button(
+                                "删除模板",
+                                variant="secondary",
+                            )
+
+                if not KH_DEMO_MODE:
+                    with gr.Column(visible=False, elem_id="archived-feedback-panel"):
+                        self.report_issue = ReportIssue(self._app)
+                else:
+                    with gr.Accordion(label="相关 papers", open=False):
+                        self.related_papers = gr.Markdown(elem_id="related-papers")
+
+                    self.hint_page = HintPage(self._app)
+
+            with gr.Column(scale=6, elem_id="chat-area"):
+                if KH_DEMO_MODE:
+                    self.paper_list = PaperListPage(self._app)
+
+                self.chat_panel = ChatPanel(self._app)
 
             with gr.Column(
                 scale=INFO_PANEL_SCALES[False], elem_id="chat-info-panel"
@@ -412,6 +504,137 @@ class ChatPage(BasePage):
         else:
             plot = gr.update(visible=False)
         return plot
+
+    def _prompt_store_path(self):
+        return flowsettings.KH_USER_DATA_DIR / "prompt_templates.json"
+
+    def _load_prompt_template_map(self, user_id) -> dict[str, str]:
+        user_key = str(user_id or "default")
+        store_path = self._prompt_store_path()
+        templates = deepcopy(DEFAULT_PROMPT_TEMPLATES)
+        if store_path.exists():
+            try:
+                with store_path.open(encoding="utf-8") as fi:
+                    data = json.load(fi)
+                templates.update(data.get(user_key, {}))
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"Failed to load prompt templates: {e}")
+        return templates
+
+    def _write_prompt_template_map(self, user_id, templates: dict[str, str]):
+        user_key = str(user_id or "default")
+        store_path = self._prompt_store_path()
+        data = {}
+        if store_path.exists():
+            try:
+                with store_path.open(encoding="utf-8") as fi:
+                    data = json.load(fi)
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"Failed to read prompt template store: {e}")
+        data[user_key] = templates
+        with store_path.open("w", encoding="utf-8") as fo:
+            json.dump(data, fo, ensure_ascii=False, indent=2)
+
+    def load_prompt_templates(self, user_id):
+        templates = self._load_prompt_template_map(user_id)
+        selected_name = next(iter(templates), DEFAULT_PROMPT_TEMPLATE_NAME)
+        selected_text = templates.get(selected_name, DEFAULT_PROMPT_TEMPLATE_TEXT)
+        choices = list(templates.keys())
+        return (
+            templates,
+            gr.update(choices=choices, value=selected_name),
+            selected_name,
+            selected_text,
+        )
+
+    def select_prompt_template(self, templates, selected_name):
+        templates = templates or deepcopy(DEFAULT_PROMPT_TEMPLATES)
+        return selected_name, templates.get(selected_name, "")
+
+    def save_prompt_template(self, templates, name, text, user_id):
+        name = (name or "").strip()
+        text = (text or "").strip()
+        if not name:
+            raise gr.Error("模板名称不能为空")
+        if "{context}" not in text or "{question}" not in text or "{lang}" not in text:
+            raise gr.Error("QA Prompt 必须包含 {context}、{question} 和 {lang}")
+
+        templates = templates or deepcopy(DEFAULT_PROMPT_TEMPLATES)
+        templates[name] = text
+        self._write_prompt_template_map(user_id, templates)
+        gr.Info(f"提示词模板 {name} 已保存")
+        return (
+            templates,
+            gr.update(choices=list(templates.keys()), value=name),
+            name,
+            text,
+        )
+
+    def delete_prompt_template(self, templates, selected_name, user_id):
+        templates = templates or deepcopy(DEFAULT_PROMPT_TEMPLATES)
+        if selected_name == DEFAULT_PROMPT_TEMPLATE_NAME:
+            raise gr.Error("默认模板不能删除")
+        if selected_name in templates:
+            templates.pop(selected_name)
+            self._write_prompt_template_map(user_id, templates)
+            gr.Info(f"提示词模板 {selected_name} 已删除")
+        selected_name = next(iter(templates), DEFAULT_PROMPT_TEMPLATE_NAME)
+        return (
+            templates,
+            gr.update(choices=list(templates.keys()), value=selected_name),
+            selected_name,
+            templates.get(selected_name, DEFAULT_PROMPT_TEMPLATE_TEXT),
+        )
+
+    def format_answer_with_refs(self, text, refs, placeholder):
+        return text or placeholder
+
+    def render_diagnostics_panel(self, diagnostics: dict) -> str:
+        retrieval = diagnostics.get("retrieval", {})
+        answer = diagnostics.get("answer", {})
+        tokens = diagnostics.get("tokens", {})
+
+        def fmt_int(value):
+            return "未返回" if value in (None, -1) else f"{int(value):,}"
+
+        def fmt_percent(value):
+            return "0%" if value is None else f"{value * 100:.0f}%"
+
+        def fmt_score(value):
+            return "未计算" if value is None else f"{value:.2f}"
+
+        return (
+            "<section class='chat-diagnostics'>"
+            "<h4>回答诊断</h4>"
+            "<div class='chat-diagnostic-grid'>"
+            "<div><span>召回文档</span><b>{retrieved}</b></div>"
+            "<div><span>引用覆盖率</span><b>{coverage}</b></div>"
+            "<div><span>引用数量</span><b>{citations}</b></div>"
+            "<div><span>平均相关分</span><b>{avg_score}</b></div>"
+            "<div><span>Prompt tokens</span><b>{prompt_tokens}</b></div>"
+            "<div><span>Completion tokens</span><b>{completion_tokens}</b></div>"
+            "<div><span>Total tokens</span><b>{total_tokens}</b></div>"
+            "<div><span>回答置信度</span><b>{qa_score}</b></div>"
+            "</div>"
+            "<p>召回率按“被引用文档数 / 召回文档数”计算。</p>"
+            "</section>"
+        ).format(
+            retrieved=fmt_int(retrieval.get("retrieved_count")),
+            coverage=fmt_percent(retrieval.get("citation_coverage")),
+            citations=fmt_int(retrieval.get("citation_count")),
+            avg_score=fmt_score(retrieval.get("avg_relevance_score")),
+            prompt_tokens=fmt_int(tokens.get("prompt_tokens")),
+            completion_tokens=fmt_int(tokens.get("completion_tokens")),
+            total_tokens=fmt_int(tokens.get("total_tokens")),
+            qa_score=fmt_score(answer.get("qa_score")),
+        )
+
+    def append_info_content(self, current: str, content) -> str:
+        if content is None:
+            return ""
+        if isinstance(content, dict) and content.get("type") == "diagnostics":
+            return current + self.render_diagnostics_panel(content)
+        return current + str(content)
 
     def on_register_events(self):
         # first index paper recommendation
@@ -467,6 +690,14 @@ class ChatPage(BasePage):
                     self.use_mindmap,
                     self.citation,
                     self.language,
+                    self.retrieval_top_k,
+                    self.first_round_multiplier,
+                    self.retrieval_mode,
+                    self.use_reranking,
+                    self.use_llm_reranking,
+                    self.use_mmr,
+                    self.prioritize_table,
+                    self.prompt_template_text,
                     self.state_chat,
                     self._command_state,
                     self._app.user_id,
@@ -513,6 +744,44 @@ class ChatPage(BasePage):
             )
         )
 
+        self.prompt_template_select.change(
+            self.select_prompt_template,
+            inputs=[self.prompt_templates_state, self.prompt_template_select],
+            outputs=[self.prompt_template_name, self.prompt_template_text],
+            show_progress="hidden",
+        )
+        self.prompt_template_save.click(
+            self.save_prompt_template,
+            inputs=[
+                self.prompt_templates_state,
+                self.prompt_template_name,
+                self.prompt_template_text,
+                self._app.user_id,
+            ],
+            outputs=[
+                self.prompt_templates_state,
+                self.prompt_template_select,
+                self.prompt_template_name,
+                self.prompt_template_text,
+            ],
+            show_progress="hidden",
+        )
+        self.prompt_template_delete.click(
+            self.delete_prompt_template,
+            inputs=[
+                self.prompt_templates_state,
+                self.prompt_template_select,
+                self._app.user_id,
+            ],
+            outputs=[
+                self.prompt_templates_state,
+                self.prompt_template_select,
+                self.prompt_template_name,
+                self.prompt_template_text,
+            ],
+            show_progress="hidden",
+        )
+
         onSuggestChatEvent = {
             "fn": self.suggest_chat_conv,
             "inputs": [
@@ -553,12 +822,10 @@ class ChatPage(BasePage):
             )
 
         self.chat_control.btn_info_expand.click(
-            fn=lambda is_expanded: (
-                gr.update(scale=INFO_PANEL_SCALES[is_expanded]),
-                not is_expanded,
-            ),
-            inputs=self._info_panel_expanded,
-            outputs=[self.info_column, self._info_panel_expanded],
+            fn=None,
+            inputs=None,
+            outputs=None,
+            js="function() {toggleInfoColumn();}",
         )
         self.chat_control.btn_chat_expand.click(
             fn=None, inputs=None, js="function() {toggleChatColumn();}"
@@ -896,8 +1163,8 @@ class ChatPage(BasePage):
             raise ValueError("输入为空")
 
         chat_input_text = chat_input.get("text", "")
-        display_chat_input_text = format_mentions_for_display(chat_input_text)
         file_ids = []
+        display_file_names = []
         used_command = None
 
         first_selector_choices_map = {
@@ -922,6 +1189,7 @@ class ChatPage(BasePage):
             file_ids.extend(
                 [file_id for file_id in indexed_file_ids if file_id is not None]
             )
+            display_file_names.extend(file_names)
 
         # get all urls in input_str
         urls, chat_input_text = get_urls(chat_input_text)
@@ -938,6 +1206,40 @@ class ChatPage(BasePage):
 
             # Add new file ids to the first selector choices for display
             first_selector_choices.extend(zip(urls, indexed_url_ids))
+
+        uploaded_files = self._get_chat_uploaded_file_paths(chat_input.get("files", []))
+        if uploaded_files:
+            if not self.first_indexing_file_fn:
+                raise gr.Error("文件索引器尚未准备好，请稍后重试。")
+
+            print("Detected chat uploads", uploaded_files)
+            indexed_upload_ids = self.first_indexing_file_fn(
+                uploaded_files,
+                False,
+                settings,
+                user_id,
+            )
+            indexed_uploads = [
+                (file_path, file_id)
+                for file_path, file_id in zip(uploaded_files, indexed_upload_ids)
+                if file_id is not None
+            ]
+            file_ids.extend(file_id for _, file_id in indexed_uploads)
+
+            uploaded_file_names = [
+                self._get_chat_uploaded_file_name(file_path)
+                for file_path, _ in indexed_uploads
+            ]
+            display_file_names.extend(uploaded_file_names)
+            first_selector_choices.extend(
+                (file_name, file_id)
+                for file_name, (_, file_id) in zip(uploaded_file_names, indexed_uploads)
+            )
+
+        display_chat_input_text = self._build_display_chat_input(
+            chat_input.get("text", ""),
+            display_file_names,
+        )
 
         # if file_ids is not empty and chat_input_text is empty
         # set the input to summary
@@ -990,6 +1292,38 @@ class ChatPage(BasePage):
             + selector_output
             + [used_command]
         )
+
+    @staticmethod
+    def _get_chat_uploaded_file_paths(files) -> list[str]:
+        file_paths = []
+        for file in files or []:
+            if isinstance(file, (str, os.PathLike)):
+                file_paths.append(str(file))
+            elif isinstance(file, dict):
+                path = file.get("path") or file.get("name")
+                if path:
+                    file_paths.append(str(path))
+            else:
+                path = getattr(file, "path", None) or getattr(file, "name", None)
+                if path:
+                    file_paths.append(str(path))
+        return file_paths
+
+    @staticmethod
+    def _get_chat_uploaded_file_name(file_path: str) -> str:
+        return Path(str(file_path)).name
+
+    @staticmethod
+    def _build_display_chat_input(chat_input_text: str, file_names: list[str]) -> str:
+        display_text = format_mentions_for_display(chat_input_text)
+        for file_name in file_names:
+            file_mention = f'@"{file_name}"'
+            if (
+                file_mention not in chat_input_text
+                and f"@{file_name}" not in chat_input_text
+            ):
+                display_text = f"{display_text} {file_mention}".strip()
+        return format_mentions_for_display(display_text)
 
     def get_recommendations(self, first_selector_choices, file_ids):
         first_selector_choices_map = {
@@ -1063,6 +1397,22 @@ class ChatPage(BasePage):
                     "show_progress": "hidden",
                 },
             )
+            if not KH_DEMO_MODE:
+                for event_name in ["onSignIn", "onSignOut"]:
+                    self._app.subscribe_event(
+                        name=event_name,
+                        definition={
+                            "fn": self.load_prompt_templates,
+                            "inputs": [self._app.user_id],
+                            "outputs": [
+                                self.prompt_templates_state,
+                                self.prompt_template_select,
+                                self.prompt_template_name,
+                                self.prompt_template_text,
+                            ],
+                            "show_progress": "hidden",
+                        },
+                    )
 
     def _on_app_created(self):
         if KH_DEMO_MODE:
@@ -1084,6 +1434,17 @@ class ChatPage(BasePage):
                 fn=None,
                 inputs=None,
                 js=chat_input_focus_js,
+            )
+        elif not KH_DEMO_MODE:
+            self._app.app.load(
+                self.load_prompt_templates,
+                inputs=[self._app.user_id],
+                outputs=[
+                    self.prompt_templates_state,
+                    self.prompt_template_select,
+                    self.prompt_template_name,
+                    self.prompt_template_text,
+                ],
             )
 
     def persist_data_source(
@@ -1187,6 +1548,14 @@ class ChatPage(BasePage):
         session_use_mindmap: bool | str,
         session_use_citation: str,
         session_language: str,
+        session_top_k: int | float,
+        session_first_round_multiplier: int | float,
+        session_retrieval_mode: str,
+        session_use_reranking: bool,
+        session_use_llm_reranking: bool,
+        session_use_mmr: bool,
+        session_prioritize_table: bool,
+        session_prompt_template: str,
         state: dict,
         command_state: str | None,
         user_id: int,
@@ -1243,6 +1612,32 @@ class ChatPage(BasePage):
 
         if session_language not in (DEFAULT_SETTING, None):
             settings["reasoning.lang"] = session_language
+
+        if session_prompt_template:
+            settings["reasoning.options.simple.qa_prompt"] = session_prompt_template
+            if f"reasoning.options.{reasoning_id}.qa_prompt" in settings:
+                settings[f"reasoning.options.{reasoning_id}.qa_prompt"] = (
+                    session_prompt_template
+                )
+
+        try:
+            session_top_k = int(session_top_k)
+            session_first_round_multiplier = int(session_first_round_multiplier)
+        except (TypeError, ValueError):
+            session_top_k = 10
+            session_first_round_multiplier = 10
+
+        for index in self._app.index_manager.indices:
+            prefix = f"index.options.{index.id}."
+            settings[prefix + "num_retrieval"] = session_top_k
+            settings[prefix + "first_round_top_k_mult"] = (
+                session_first_round_multiplier
+            )
+            settings[prefix + "retrieval_mode"] = session_retrieval_mode or "hybrid"
+            settings[prefix + "use_reranking"] = bool(session_use_reranking)
+            settings[prefix + "use_llm_reranking"] = bool(session_use_llm_reranking)
+            settings[prefix + "mmr"] = bool(session_use_mmr)
+            settings[prefix + "prioritize_table"] = bool(session_prioritize_table)
 
         # get retrievers
         retrievers = []
@@ -1303,6 +1698,14 @@ class ChatPage(BasePage):
         use_mind_map,
         use_citation,
         language,
+        retrieval_top_k,
+        first_round_multiplier,
+        retrieval_mode,
+        use_reranking,
+        use_llm_reranking,
+        use_mmr,
+        prioritize_table,
+        prompt_template,
         chat_state,
         command_state,
         user_id,
@@ -1332,6 +1735,14 @@ class ChatPage(BasePage):
             use_mind_map,
             use_citation,
             language,
+            retrieval_top_k,
+            first_round_multiplier,
+            retrieval_mode,
+            use_reranking,
+            use_llm_reranking,
+            use_mmr,
+            prioritize_table,
+            prompt_template,
             chat_state,
             command_state,
             user_id,
@@ -1340,14 +1751,18 @@ class ChatPage(BasePage):
         print("Reasoning state", reasoning_state)
         pipeline.set_output_queue(queue)
 
-        text, refs, plot, plot_gr = "", "", None, gr.update(visible=False)
+        text = ""
+        refs = ""
+        info_panel_content = ""
+        plot, plot_gr = None, gr.update(visible=False)
         msg_placeholder = getattr(
             flowsettings, "KH_CHAT_MSG_PLACEHOLDER", "Thinking ..."
         )
         print(msg_placeholder)
         yield (
-            chat_history + [(display_input, text or msg_placeholder)],
-            refs,
+            chat_history
+            + [(display_input, self.format_answer_with_refs(text, refs, msg_placeholder))],
+            info_panel_content,
             plot_gr,
             plot,
             chat_state,
@@ -1373,10 +1788,14 @@ class ChatPage(BasePage):
                         text += response.content
 
                 if response.channel == "info":
-                    if response.content is None:
-                        refs = ""
-                    else:
-                        refs += response.content
+                    info_panel_content = self.append_info_content(
+                        info_panel_content, response.content
+                    )
+                    if not (
+                        isinstance(response.content, dict)
+                        and response.content.get("type") == "diagnostics"
+                    ):
+                        refs = self.append_info_content(refs, response.content)
 
                 if response.channel == "plot":
                     plot = response.content
@@ -1385,8 +1804,14 @@ class ChatPage(BasePage):
                 chat_state[pipeline.get_info()["id"]] = reasoning_state["pipeline"]
 
                 yield (
-                    chat_history + [(display_input, text or msg_placeholder)],
-                    refs,
+                    chat_history
+                    + [
+                        (
+                            display_input,
+                            self.format_answer_with_refs(text, refs, msg_placeholder),
+                        )
+                    ],
+                    info_panel_content,
                     plot_gr,
                     plot,
                     chat_state,
@@ -1400,8 +1825,9 @@ class ChatPage(BasePage):
             )
             print(f"Generate nothing: {empty_msg}")
             yield (
-                chat_history + [(display_input, text or empty_msg)],
-                refs,
+                chat_history
+                + [(display_input, self.format_answer_with_refs(text, refs, empty_msg))],
+                info_panel_content,
                 plot_gr,
                 plot,
                 chat_state,

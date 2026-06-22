@@ -40,8 +40,10 @@ CONTEXT_RELEVANT_WARNING_SCORE = config(
 DEFAULT_QA_TEXT_PROMPT = (
     "Use the following pieces of context to answer the question at the end in detail with clear explanation. "  # noqa: E501
     "If you don't know the answer, just say that you don't know, don't try to "
-    "make up an answer. Give answer in "
-    "{lang}.\n\n"
+    "make up an answer. Answer directly; do not start with phrases like "
+    "'according to the provided context', 'based on the context', "
+    "'根据提供的上下文', '根据上下文', or '基于资料'. "
+    "Give answer in {lang}.\n\n"
     "{context}\n"
     "Question: {question}\n"
     "Helpful Answer:"
@@ -51,7 +53,9 @@ DEFAULT_QA_TABLE_PROMPT = (
     "Use the given context: texts, tables, and figures below to answer the question, "
     "then provide answer with clear explanation."
     "If you don't know the answer, just say that you don't know, "
-    "don't try to make up an answer. Give answer in {lang}.\n\n"
+    "don't try to make up an answer. Answer directly; do not start with phrases like "
+    "'according to the provided context', 'based on the context', "
+    "'根据提供的上下文', '根据上下文', or '基于资料'. Give answer in {lang}.\n\n"
     "Context:\n"
     "{context}\n"
     "Question: {question}\n"
@@ -62,6 +66,9 @@ DEFAULT_QA_CHATBOT_PROMPT = (
     "Pick the most suitable chatbot scenarios to answer the question at the end, "
     "output the provided answer text. If you don't know the answer, "
     "just say that you don't know. Keep the answer as concise as possible. "
+    "Answer directly; do not start with phrases like "
+    "'according to the provided context', 'based on the context', "
+    "'根据提供的上下文', '根据上下文', or '基于资料'. "
     "Give answer in {lang}.\n\n"
     "Context:\n"
     "{context}\n"
@@ -72,6 +79,9 @@ DEFAULT_QA_CHATBOT_PROMPT = (
 DEFAULT_QA_FIGURE_PROMPT = (
     "Use the given context: texts, tables, and figures below to answer the question. "
     "If you don't know the answer, just say that you don't know. "
+    "Answer directly; do not start with phrases like "
+    "'according to the provided context', 'based on the context', "
+    "'根据提供的上下文', '根据上下文', or '基于资料'. "
     "Give answer in {lang}.\n\n"
     "Context: \n"
     "{context}\n"
@@ -230,6 +240,7 @@ class AnswerWithContextPipeline(BaseComponent):
 
         output = ""
         logprobs = []
+        prompt_tokens = completion_tokens = total_tokens = -1
 
         messages = []
         if self.system_prompt:
@@ -265,10 +276,22 @@ class AnswerWithContextPipeline(BaseComponent):
             for out_msg in self.llm.stream(messages):
                 output += out_msg.text
                 logprobs += out_msg.logprobs
+                if out_msg.prompt_tokens >= 0:
+                    prompt_tokens = max(prompt_tokens, 0) + out_msg.prompt_tokens
+                if out_msg.completion_tokens >= 0:
+                    completion_tokens = (
+                        max(completion_tokens, 0) + out_msg.completion_tokens
+                    )
+                if out_msg.total_tokens >= 0:
+                    total_tokens = max(total_tokens, 0) + out_msg.total_tokens
                 yield Document(channel="chat", content=out_msg.text)
         except NotImplementedError:
             print("Streaming is not supported, falling back to normal processing")
-            output = self.llm(messages).text
+            out_msg = self.llm(messages)
+            output = out_msg.text
+            prompt_tokens = out_msg.prompt_tokens
+            completion_tokens = out_msg.completion_tokens
+            total_tokens = out_msg.total_tokens
             yield Document(channel="chat", content=output)
 
         if logprobs:
@@ -288,6 +311,9 @@ class AnswerWithContextPipeline(BaseComponent):
                 "mindmap": mindmap,
                 "citation": citation,
                 "qa_score": qa_score,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
             },
         )
 

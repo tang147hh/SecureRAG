@@ -152,14 +152,14 @@ class LLMManagement(BasePage):
     def __init__(self, app):
         self._app = app
         self.spec_desc_default = (
-            "# Spec 说明\n\n请选择一个 LLM 查看 spec 说明。"
+            "DeepSeek 使用兼容 OpenAI 的接口，只需要填写名称、模型、API key 和 URL。"
         )
         self.on_building_ui()
 
     def on_building_ui(self):
         with gr.Tab(label="查看"):
             self.llm_list = gr.DataFrame(
-                headers=["名称", "vendor", "默认"],
+                headers=["名称", "类型", "默认"],
                 interactive=False,
                 column_widths=[30, 40, 30],
             )
@@ -171,22 +171,21 @@ class LLMManagement(BasePage):
                         self.edit_default = gr.Checkbox(
                             label="设为默认",
                             info=(
-                                "将此 LLM 设为默认。如果未设置默认值，"
-                                "将随机使用一个 LLM。其他组件未指定 LLM 时，"
-                                "会默认使用此 LLM。"
+                                "系统问答、检索评分等场景会默认使用此模型。"
                             ),
                         )
                         self.edit_name = gr.Textbox(
                             label="名称",
                             info="编辑以重命名此 LLM。",
+                            interactive=False,
                         )
                         self.edit_vendor = gr.Dropdown(
-                            label="厂商",
+                            label="接口类型",
                             interactive=False,
                         )
                         self.edit_model = gr.Textbox(
                             label="模型",
-                            placeholder="例如：gpt-4o-mini / qwen-plus",
+                            placeholder="例如：deepseek-chat",
                         )
                         self.edit_api_key = gr.Textbox(
                             label="API key",
@@ -195,16 +194,18 @@ class LLMManagement(BasePage):
                         )
                         self.edit_base_url = gr.Textbox(
                             label="URL",
-                            placeholder="例如：https://api.openai.com/v1",
+                            placeholder="例如：https://api.deepseek.com",
                         )
                         self.edit_api_version = gr.Textbox(
                             label="API version",
                             placeholder="Azure 等厂商需要时填写",
+                            visible=False,
                         )
                         self.edit_spec = gr.Textbox(
                             label="高级 YAML",
                             info="仅填写上方字段之外的额外参数。",
                             lines=6,
+                            visible=False,
                         )
 
                         with gr.Accordion(
@@ -241,24 +242,23 @@ class LLMManagement(BasePage):
                     with gr.Column():
                         self.edit_spec_desc = gr.Markdown("# Spec 说明")
 
-        with gr.Tab(label="添加"):
+        with gr.Tab(label="添加", visible=False):
             with gr.Row():
                 with gr.Column(scale=2):
                     self.name = gr.Textbox(
                         label="LLM 名称",
-                        info=(
-                            "必须唯一。该名称用于识别 LLM。"
-                        ),
+                        value="deepseek",
+                        info="用于在系统内识别该模型，必须唯一。",
                     )
                     self.llm_choices = gr.Dropdown(
-                        label="厂商",
-                        info=(
-                            "选择模型服务厂商或兼容接口类型。"
-                        ),
+                        label="接口类型",
+                        value="ChatOpenAI",
+                        info="DeepSeek 使用 OpenAI-compatible 接口。",
                     )
                     self.model = gr.Textbox(
                         label="模型",
-                        placeholder="例如：gpt-4o-mini / qwen-plus",
+                        value="deepseek-chat",
+                        placeholder="例如：deepseek-chat",
                     )
                     self.api_key = gr.Textbox(
                         label="API key",
@@ -267,22 +267,24 @@ class LLMManagement(BasePage):
                     )
                     self.base_url = gr.Textbox(
                         label="URL",
-                        placeholder="例如：https://api.openai.com/v1",
+                        value="https://api.deepseek.com",
+                        placeholder="例如：https://api.deepseek.com",
                     )
                     self.api_version = gr.Textbox(
                         label="API version",
                         placeholder="Azure 等厂商需要时填写",
+                        visible=False,
                     )
                     self.spec = gr.Textbox(
                         label="高级 YAML",
                         info="仅填写上方字段之外的额外参数。",
                         lines=6,
+                        visible=False,
                     )
                     self.default = gr.Checkbox(
                         label="设为默认",
-                        info=(
-                            "将此 LLM 设为默认。整个应用会默认使用此 LLM。"
-                        ),
+                        value=True,
+                        info="整个应用会默认使用此 LLM。",
                     )
                     self.btn_new = gr.Button("添加 LLM", variant="primary")
 

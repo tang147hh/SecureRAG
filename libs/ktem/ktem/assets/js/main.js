@@ -21,20 +21,16 @@ function run() {
 
   // setup conversation dropdown placeholder
   let conv_dropdown = document.querySelector("#conversation-dropdown input");
-  conv_dropdown.placeholder = "Browse conversation";
+  if (conv_dropdown) {
+    conv_dropdown.placeholder = "Browse conversation";
+  }
 
-  // move info-expand-button
+  // move side-panel toggle buttons into the chat area so they stay reachable.
   let info_expand_button = document.getElementById("info-expand-button");
-  let chat_info_panel = document.getElementById("info-expand");
-  chat_info_panel.insertBefore(
-    info_expand_button,
-    chat_info_panel.childNodes[2]
-  );
-
-  // move toggle-side-bar button
   let chat_expand_button = document.getElementById("chat-expand-button");
-  let chat_column = document.getElementById("main-chat-bot");
+  let chat_column = document.getElementById("chat-area");
   let conv_column = document.getElementById("conv-settings-panel");
+  let info_column = document.getElementById("chat-info-panel");
 
   // move setting close button
   let setting_tab_nav_bar = document.querySelector("#settings-tab .tab-nav");
@@ -43,51 +39,48 @@ function run() {
     setting_tab_nav_bar.appendChild(setting_close_button);
   }
 
-  let default_conv_column_min_width = "min(300px, 100%)";
-  conv_column.style.minWidth = default_conv_column_min_width;
-
   globalThis.toggleChatColumn = () => {
-    /* get flex-grow value of chat_column */
-    let flex_grow = conv_column.style.flexGrow;
-    if (flex_grow == "0") {
-      conv_column.style.flexGrow = "1";
-      conv_column.style.minWidth = default_conv_column_min_width;
-    } else {
-      conv_column.style.flexGrow = "0";
-      conv_column.style.minWidth = "0px";
+    if (conv_column) {
+      conv_column.classList.toggle("chat-side-panel-collapsed");
     }
   };
 
-  chat_column.insertBefore(chat_expand_button, chat_column.firstChild);
+  globalThis.toggleInfoColumn = () => {
+    if (info_column) {
+      info_column.classList.toggle("chat-side-panel-collapsed");
+    }
+  };
 
-  // move use mind-map checkbox
-  let mindmap_checkbox = document.getElementById("use-mindmap-checkbox");
-  let citation_dropdown = document.getElementById("citation-dropdown");
-  let chat_setting_panel = document.getElementById("chat-settings-expand");
-  chat_setting_panel.insertBefore(
-    mindmap_checkbox,
-    chat_setting_panel.childNodes[2]
-  );
-  chat_setting_panel.insertBefore(citation_dropdown, mindmap_checkbox);
+  if (chat_column) {
+    if (chat_expand_button) {
+      chat_column.insertBefore(chat_expand_button, chat_column.firstChild);
+    }
+    if (info_expand_button) {
+      chat_column.insertBefore(info_expand_button, chat_column.firstChild);
+    }
+  }
 
   // move share conv checkbox
   let report_div = document.querySelector(
     "#report-accordion > div:nth-child(3) > div:nth-child(1)"
   );
   let share_conv_checkbox = document.getElementById("is-public-checkbox");
-  if (share_conv_checkbox) {
+  if (report_div && share_conv_checkbox) {
     report_div.insertBefore(share_conv_checkbox, report_div.querySelector("button"));
   }
 
   // create slider toggle
   const is_public_checkbox = document.getElementById("suggest-chat-checkbox");
-  const label_element = is_public_checkbox.getElementsByTagName("label")[0];
-  const checkbox_span = is_public_checkbox.getElementsByTagName("span")[0];
-  new_div = document.createElement("div");
-
-  label_element.classList.add("switch");
-  is_public_checkbox.appendChild(checkbox_span);
-  label_element.appendChild(new_div);
+  if (is_public_checkbox) {
+    const label_element = is_public_checkbox.getElementsByTagName("label")[0];
+    const checkbox_span = is_public_checkbox.getElementsByTagName("span")[0];
+    if (label_element && checkbox_span) {
+      let new_div = document.createElement("div");
+      label_element.classList.add("switch");
+      is_public_checkbox.appendChild(checkbox_span);
+      label_element.appendChild(new_div);
+    }
+  }
 
   // clpse
   globalThis.clpseFn = (id) => {

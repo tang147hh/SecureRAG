@@ -7,8 +7,7 @@ KH_DEMO_MODE = getattr(flowsettings, "KH_DEMO_MODE", False)
 if not KH_DEMO_MODE:
     PLACEHOLDER_TEXT = (
         "这是新会话的开始。\n"
-        "可以先上传文件或 web URL。"
-        "访问文件标签页查看更多选项（例如：GraphRAG）。"
+        "可以先上传文件或 web URL，或直接选择已有目录开始提问。"
     )
 else:
     PLACEHOLDER_TEXT = (

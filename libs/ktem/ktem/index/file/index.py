@@ -382,17 +382,17 @@ class FileIndex(BaseIndex):
 
         return {
             "embedding": {
-                "name": "Embedding model",
+                "name": "Embedding 模型",
                 "value": embedding_default,
                 "component": "dropdown",
                 "choices": embedding_choices,
-                "info": "要使用的 embedding model 名称。",
+                "info": "文档入库和检索使用的 Embedding 模型。",
             },
             "supported_file_types": {
                 "name": "支持的文件类型",
                 "value": ".pdf, .txt",
                 "component": "text",
-                "info": "可被 indexed 的文件类型，用逗号分隔。",
+                "info": "可上传的文件类型，用逗号分隔。",
             },
             "max_file_size": {
                 "name": "最大文件大小 (MB)",
@@ -401,11 +401,11 @@ class FileIndex(BaseIndex):
                 "info": "文件最大大小。设为 0 可禁用限制。",
             },
             "max_number_of_files": {
-                "name": "可 indexed 的最大文件数",
+                "name": "最大文件数",
                 "value": 0,
                 "component": "number",
                 "info": (
-                    "系统中可被 indexed 的文件总数。"
+                    "系统中可入库的文件总数。"
                     "设为 0 可禁用限制。"
                 ),
             },
@@ -415,24 +415,6 @@ class FileIndex(BaseIndex):
                 "component": "radio",
                 "choices": [("是", True), ("否", False)],
                 "info": "如果设为私有，文件将不能跨用户访问。",
-            },
-            "chunk_size": {
-                "name": "chunk 大小（tokens 数）",
-                "value": 0,
-                "component": "number",
-                "info": (
-                    "每个文本片段的 tokens 数。"
-                    "设为 0 使用开发者设置。"
-                ),
-            },
-            "chunk_overlap": {
-                "name": "chunks 之间重叠的 tokens 数",
-                "value": 0,
-                "component": "number",
-                "info": (
-                    "连续文本片段之间应相互重叠的 tokens 数。"
-                    "设为 0 使用开发者设置。"
-                ),
             },
         }
 

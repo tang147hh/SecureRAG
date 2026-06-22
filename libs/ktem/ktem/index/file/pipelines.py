@@ -100,7 +100,9 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
     get_extra_table: bool = False
     mmr: bool = False
     top_k: int = 5
+    first_round_top_k_mult: int = 10
     retrieval_mode: str = "hybrid"
+    doc_ids: Optional[list[str]] = None
 
     @Node.auto(depends_on=["embedding", "VS", "DS"])
     def vector_retrieval(self) -> VectorRetrieval:
@@ -110,6 +112,7 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
             doc_store=self.DS,
             retrieval_mode=self.retrieval_mode,  # type: ignore
             rerankers=self.rerankers,
+            first_round_top_k_mult=self.first_round_top_k_mult,
         )
 
     def run(
@@ -125,6 +128,9 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
             text: the text to retrieve similar documents
             doc_ids: list of document ids to constraint the retrieval
         """
+        if doc_ids is None:
+            doc_ids = self.doc_ids
+
         # flatten doc_ids in case of group of doc_ids are passed
         if doc_ids:
             flatten_doc_ids = []
@@ -224,58 +230,18 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
 
     @classmethod
     def get_user_settings(cls) -> dict:
-        from ktem.llms.manager import llms
-
-        try:
-            reranking_llm = llms.get_default_name()
-            reranking_llm_choices = list(llms.options().keys())
-        except Exception as e:
-            logger.error(e)
-            reranking_llm = None
-            reranking_llm_choices = []
-
         return {
-            "reranking_llm": {
-                "name": "LLM for relevant scoring",
-                "value": reranking_llm,
-                "component": "dropdown",
-                "choices": reranking_llm_choices,
-                "special_type": "llm",
-            },
             "num_retrieval": {
-                "name": "Number of document chunks to retrieve",
+                "name": "召回片段数",
                 "value": 10,
                 "component": "number",
+                "info": "每次检索给大模型参考的文档片段数量。",
             },
-            "retrieval_mode": {
-                "name": "Retrieval mode",
-                "value": "hybrid",
-                "choices": ["vector", "text", "hybrid"],
-                "component": "dropdown",
-            },
-            "prioritize_table": {
-                "name": "Prioritize table",
-                "value": False,
-                "choices": [True, False],
-                "component": "checkbox",
-            },
-            "mmr": {
-                "name": "Use MMR",
-                "value": False,
-                "choices": [True, False],
-                "component": "checkbox",
-            },
-            "use_reranking": {
-                "name": "Use reranking",
-                "value": True,
-                "choices": [True, False],
-                "component": "checkbox",
-            },
-            "use_llm_reranking": {
-                "name": "Use LLM relevant scoring",
-                "value": not config("USE_LOW_LLM_REQUESTS", default=False, cast=bool),
-                "choices": [True, False],
-                "component": "checkbox",
+            "first_round_top_k_mult": {
+                "name": "第一轮召回倍数",
+                "value": 10,
+                "component": "number",
+                "info": "第一轮候选数量 = 召回片段数 x 此倍数。",
             },
         }
 
@@ -287,41 +253,46 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
             settings: the settings of the app
             kwargs: other arguments
         """
-        use_llm_reranking = user_settings.get("use_llm_reranking", False)
+        use_llm_reranking = user_settings.get(
+            "use_llm_reranking",
+            not config("USE_LOW_LLM_REQUESTS", default=False, cast=bool),
+        )
+        reranking_llm = user_settings.get("reranking_llm", llms.get_default_name())
 
-        retriever = cls(
-            get_extra_table=user_settings["prioritize_table"],
-            top_k=user_settings["num_retrieval"],
-            mmr=user_settings["mmr"],
-            embedding=embedding_models_manager[
-                index_settings.get(
-                    "embedding", embedding_models_manager.get_default_name()
-                )
-            ],
-            retrieval_mode=user_settings["retrieval_mode"],
-            llm_scorer=(LLMTrulensScoring() if use_llm_reranking else None),
-            rerankers=[
+        use_reranking = user_settings.get("use_reranking", False)
+        rerankers = []
+        if use_reranking and reranking_models_manager.options():
+            rerankers = [
                 reranking_models_manager[
                     index_settings.get(
                         "reranking", reranking_models_manager.get_default_name()
                     )
                 ]
+            ]
+
+        retriever = cls(
+            get_extra_table=user_settings.get("prioritize_table", False),
+            top_k=user_settings.get("num_retrieval", 10),
+            first_round_top_k_mult=user_settings.get("first_round_top_k_mult", 10),
+            mmr=user_settings.get("mmr", False),
+            embedding=embedding_models_manager[
+                index_settings.get(
+                    "embedding", embedding_models_manager.get_default_name()
+                )
             ],
+            retrieval_mode=user_settings.get("retrieval_mode", "hybrid"),
+            llm_scorer=(LLMTrulensScoring() if use_llm_reranking else None),
+            rerankers=rerankers,
         )
-        if not user_settings["use_reranking"]:
-            retriever.rerankers = []  # type: ignore
 
         for reranker in retriever.rerankers:
             if isinstance(reranker, LLMReranking):
-                reranker.llm = llms.get(
-                    user_settings["reranking_llm"], llms.get_default()
-                )
+                reranker.llm = llms.get(reranking_llm, llms.get_default())
 
         if retriever.llm_scorer:
-            retriever.llm_scorer.llm = llms.get(
-                user_settings["reranking_llm"], llms.get_default()
-            )
+            retriever.llm_scorer.llm = llms.get(reranking_llm, llms.get_default())
 
+        retriever.doc_ids = selected
         kwargs = {".doc_ids": selected}
         retriever.set_run(kwargs, temp=False)
         return retriever
