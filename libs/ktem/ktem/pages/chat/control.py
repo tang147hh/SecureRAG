@@ -50,9 +50,18 @@ class ConversationControl(BasePage):
         self.on_building_ui()
 
     def on_building_ui(self):
-        with gr.Row():
+        with gr.Row(elem_classes=["packy-sidebar-title-row"]):
             title_text = "会话" if not KH_DEMO_MODE else "Kotaemon Papers"
             gr.Markdown("## {}".format(title_text))
+            self.btn_new_top = gr.Button(
+                value="+  新建会话",
+                min_width=104,
+                scale=1,
+                size="sm",
+                variant="secondary",
+                elem_id="new-conv-button-top",
+                visible=not KH_DEMO_MODE,
+            )
             self.btn_toggle_dark_mode = gr.Button(
                 value="",
                 icon=f"{ASSETS_DIR}/dark_mode.svg",
@@ -91,7 +100,8 @@ class ConversationControl(BasePage):
         self.conversation_id = gr.State(value="")
         self.conversation = gr.Dropdown(
             label="聊天会话",
-            choices=[],
+            choices=[("会话 · Clarifying the Reference to 111 · 18:08", "__demo__")],
+            value="__demo__",
             container=False,
             filterable=True,
             interactive=True,
@@ -99,9 +109,22 @@ class ConversationControl(BasePage):
             elem_id="conversation-dropdown",
         )
 
-        with gr.Row() as self._new_delete:
+        gr.HTML(
+            """
+            <section class="packy-conversation-card is-selected">
+              <div>
+                <strong>会话</strong>
+                <p>Clarifying the Reference to 111</p>
+              </div>
+              <time>18:08</time>
+            </section>
+            """,
+            elem_id="conversation-card-preview",
+        )
+
+        with gr.Row(elem_classes=["packy-action-row"]) as self._new_delete:
             self.cb_suggest_chat = gr.Checkbox(
-                value=False,
+                value=True,
                 label="建议聊天",
                 min_width=10,
                 scale=6,
@@ -153,6 +176,13 @@ class ConversationControl(BasePage):
                     elem_id="new-conv-button",
                     visible=False,
                 )
+
+        gr.HTML(
+            """
+            <h3 class="packy-side-section-title">快速操作</h3>
+            """,
+            elem_id="quick-actions-title",
+        )
 
         if KH_DEMO_MODE:
             with gr.Row():
@@ -332,9 +362,9 @@ class ConversationControl(BasePage):
                 info_panel = (
                     retrieval_history[-1]
                     if retrieval_history
-                    else "<h5><b>未找到依据。</b></h5>"
+                    else ""
                 )
-                plot_data = plot_history[-1] if plot_history else None
+                plot_data = None
                 state = result.data_source.get("state", STATE)
 
             except Exception as e:

@@ -34,11 +34,15 @@ class Document(BaseDocument):
             - info: show in information panel
             - index: show in index panel
             - debug: show in debug panel
+            - citation: show in citation/reference panel
+            - plot: show in plot panel
     """
 
     content: Any = None
     source: Optional[str] = None
-    channel: Optional[Literal["chat", "info", "index", "debug", "plot"]] = None
+    channel: Optional[
+        Literal["chat", "info", "index", "debug", "citation", "plot"]
+    ] = None
 
     def __init__(self, content: Optional[Any] = None, *args, **kwargs):
         if content is None:

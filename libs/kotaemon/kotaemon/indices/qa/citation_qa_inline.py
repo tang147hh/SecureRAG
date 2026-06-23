@@ -116,6 +116,7 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
         prompt = prompt_template.populate(
             context=evidence,
             question=question,
+            lang=self.lang,
             safe=False,
         )
 

@@ -477,3 +477,58 @@ doc_env/
 # application data
 ktem_app_data/
 gradio_tmp/
+
+### SecureRAG local artifacts ###
+# Local runtimes and package manager caches
+install_dir/
+doc_env/
+.conda/
+.mamba/
+
+# Frontend dependencies, build outputs, and tool caches
+node_modules/
+**/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.vite-temp/
+frontend/.tmp/
+.pnpm-store/
+.npm/
+.yarn/
+.turbo/
+
+# Python build, test, type-check, and notebook caches
+*.egg-info/
+**/*.egg-info/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.pyre/
+**/.ipynb_checkpoints/
+
+# App/runtime data produced by local RAG experiments
+.theflow/
+ktem_app_data/
+storage/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+*.pem
+*.key
+
+# OS/editor leftovers
+.DS_Store
+._*

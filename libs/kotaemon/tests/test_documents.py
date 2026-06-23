@@ -19,6 +19,12 @@ def test_document_constructor_with_document():
     assert doc2.content == doc1.content
 
 
+def test_document_accepts_citation_channel():
+    doc = Document(channel="citation", content="Reference content")
+    assert doc.channel == "citation"
+    assert doc.content == "Reference content"
+
+
 @skip_when_haystack_not_installed
 def test_document_to_haystack_format():
     from haystack.schema import Document as HaystackDocument

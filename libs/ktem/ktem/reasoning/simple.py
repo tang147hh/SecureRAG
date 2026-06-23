@@ -2,6 +2,7 @@ import logging
 import threading
 from textwrap import dedent
 from typing import Generator
+from types import SimpleNamespace
 
 from decouple import config
 from ktem.embeddings.manager import embedding_models_manager as embeddings
@@ -119,17 +120,44 @@ class FullQAPipeline(BaseReasoning):
         #     query = message
         # print(f"Rewritten query: {query}")
         query = None
+        trace_recorder = None
+        try:
+            from ktem.trace import get_active_recorder
+
+            trace_recorder = get_active_recorder()
+        except Exception:
+            trace_recorder = None
+
         if not query:
             # TODO: previously return [], [] because we think this message as something
             # like "Hello", "I need help"...
             query = message
+        if trace_recorder:
+            trace_recorder.data["query_rewrite"] = {
+                "enabled": bool(self.use_rewrite and self.rewrite_pipeline),
+                "rewritten_question": query if query != message else None,
+            }
 
         docs, doc_ids = [], []
         plot_docs = []
+        skipped_retriever_infos = []
 
         for idx, retriever in enumerate(self.retrievers):
             retriever_node = self._prepare_child(retriever, f"retriever_{idx}")
-            retriever_docs = retriever_node(text=query)
+            try:
+                retriever_docs = retriever_node(text=query)
+            except Exception as e:
+                logger.exception("Retriever %s failed; continuing", retriever)
+                skipped_retriever_infos.append(
+                    Document(
+                        channel="info",
+                        content=(
+                            "<h5><b>部分检索器不可用，已跳过。</b></h5>"
+                            f"<p>{type(e).__name__}: {e}</p>"
+                        ),
+                    )
+                )
+                continue
 
             retriever_docs_text = []
             retriever_docs_plot = []
@@ -153,7 +181,9 @@ class FullQAPipeline(BaseReasoning):
                 content=Render.collapsible_with_header(doc, open_collapsible=True),
             )
             for doc in docs
-        ] + [
+        ]
+        info += skipped_retriever_infos
+        info += [
             Document(
                 channel="plot",
                 content=doc.metadata.get("data", ""),
@@ -270,15 +300,48 @@ class FullQAPipeline(BaseReasoning):
             },
         )
 
+    @staticmethod
+    def _fallback_evidences_from_docs(docs: list[RetrievedDocument]) -> list[str]:
+        evidences = []
+        for doc in docs[:5]:
+            text = " ".join((doc.text or "").split())
+            if not text:
+                continue
+            words = text.split()
+            if len(words) > 15:
+                text = " ".join(words[:15])
+            evidences.append(text)
+        return evidences
+
+    def ensure_citation_fallback(self, answer, docs) -> None:
+        citation = answer.metadata.get("citation")
+        if getattr(citation, "evidences", None):
+            return
+        evidences = self._fallback_evidences_from_docs(docs)
+        if evidences:
+            answer.metadata["citation"] = SimpleNamespace(evidences=evidences)
+
     def show_citations_and_addons(self, answer, docs, question):
         # show the evidence
-        with_citation, without_citation = self.answering_pipeline.prepare_citations(
+        with_citation, _ = self.answering_pipeline.prepare_citations(
             answer, docs
         )
-        mindmap_output = self.prepare_mindmap(answer)
-        citation_plot_output = self.prepare_citation_viz(answer, question, docs)
+        trace_recorder = None
+        try:
+            from ktem.trace import get_active_recorder
 
-        if not with_citation and not without_citation:
+            trace_recorder = get_active_recorder()
+        except Exception:
+            trace_recorder = None
+        cited_doc_ids: set[str] = set()
+        try:
+            spans = self.answering_pipeline.match_evidence_with_context(answer, docs)
+            cited_doc_ids = {doc_id for doc_id, matches in spans.items() if matches}
+        except Exception:
+            cited_doc_ids = set()
+        if trace_recorder:
+            trace_recorder.record_answer(answer, docs, cited_doc_ids)
+        if not with_citation:
             yield Document(channel="info", content=None)
             yield self.prepare_retrieval_diagnostics(answer, docs)
             yield Document(channel="info", content="<h5><b>未找到依据。</b></h5>")
@@ -291,14 +354,6 @@ class FullQAPipeline(BaseReasoning):
             # clear previous info
             yield Document(channel="info", content=None)
             yield self.prepare_retrieval_diagnostics(answer, docs)
-
-            # yield mindmap output
-            if mindmap_output:
-                yield mindmap_output
-
-            # yield citation plot output
-            if citation_plot_output:
-                yield citation_plot_output
 
             # yield warning message
             if has_llm_score and max_llm_rerank_score < CONTEXT_RELEVANT_WARNING_SCORE:
@@ -323,8 +378,6 @@ class FullQAPipeline(BaseReasoning):
                 )
 
             yield from with_citation
-            if without_citation:
-                yield from without_citation
 
     async def ainvoke(  # type: ignore
         self, message: str, conv_id: str, history: list, **kwargs  # type: ignore
@@ -334,9 +387,21 @@ class FullQAPipeline(BaseReasoning):
     def stream(  # type: ignore
         self, message: str, conv_id: str, history: list, **kwargs  # type: ignore
     ) -> Generator[Document, None, Document]:
+        trace_recorder = None
+        try:
+            from ktem.trace import get_active_recorder
+
+            trace_recorder = get_active_recorder()
+        except Exception:
+            trace_recorder = None
+
         if self.use_rewrite and self.rewrite_pipeline:
             print("Chosen rewrite pipeline", self.rewrite_pipeline)
-            message = self.rewrite_pipeline(question=message).text
+            if trace_recorder:
+                with trace_recorder.timer("query_rewrite"):
+                    message = self.rewrite_pipeline(question=message).text
+            else:
+                message = self.rewrite_pipeline(question=message).text
             print("Rewrite result", message)
 
         print(f"Retrievers {self.retrievers}")
@@ -346,6 +411,8 @@ class FullQAPipeline(BaseReasoning):
         yield from infos
 
         evidence_mode, evidence, images = self.evidence_pipeline(docs).content
+        if trace_recorder:
+            trace_recorder.record_context(docs)
 
         def generate_relevant_scores():
             nonlocal docs
@@ -358,15 +425,27 @@ class FullQAPipeline(BaseReasoning):
         else:
             scoring_thread = None
 
-        answer = yield from self.answering_pipeline.stream(
-            question=message,
-            history=history,
-            evidence=evidence,
-            evidence_mode=evidence_mode,
-            images=images,
-            conv_id=conv_id,
-            **kwargs,
-        )
+        if trace_recorder:
+            with trace_recorder.timer("llm_generation"):
+                answer = yield from self.answering_pipeline.stream(
+                    question=message,
+                    history=history,
+                    evidence=evidence,
+                    evidence_mode=evidence_mode,
+                    images=images,
+                    conv_id=conv_id,
+                    **kwargs,
+                )
+        else:
+            answer = yield from self.answering_pipeline.stream(
+                question=message,
+                history=history,
+                evidence=evidence,
+                evidence_mode=evidence_mode,
+                images=images,
+                conv_id=conv_id,
+                **kwargs,
+            )
 
         # check <think> tag from reasoning models
         processed_answer = replace_think_tag_with_details(answer.text)
@@ -379,6 +458,7 @@ class FullQAPipeline(BaseReasoning):
         if scoring_thread:
             scoring_thread.join()
 
+        self.ensure_citation_fallback(answer, docs)
         yield from self.show_citations_and_addons(answer, docs, message)
 
         return answer
@@ -429,6 +509,16 @@ class FullQAPipeline(BaseReasoning):
         answer_pipeline.use_multimodal = settings[f"{prefix}.use_multimodal"]
         answer_pipeline.system_prompt = settings[f"{prefix}.system_prompt"]
         answer_pipeline.qa_template = settings[f"{prefix}.qa_prompt"]
+        if isinstance(answer_pipeline, AnswerWithInlineCitation):
+            answer_pipeline.qa_citation_template = settings[f"{prefix}.qa_prompt"]
+        print(
+            "Using QA prompt template",
+            {
+                "reasoning": cls.get_info()["id"],
+                "inline_citation": use_inline_citation,
+                "length": len(settings[f"{prefix}.qa_prompt"]),
+            },
+        )
         answer_pipeline.lang = SUPPORTED_LANGUAGE_MAP.get(
             settings["reasoning.lang"], "English"
         )

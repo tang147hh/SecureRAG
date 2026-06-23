@@ -42,7 +42,7 @@ DEFAULT_QA_TEXT_PROMPT = (
     "If you don't know the answer, just say that you don't know, don't try to "
     "make up an answer. Answer directly; do not start with phrases like "
     "'according to the provided context', 'based on the context', "
-    "'根据提供的上下文', '根据上下文', or '基于资料'. "
+    "'根据知识', '根据知识库', '根据提供的上下文', '根据上下文', or '基于资料'. "
     "Give answer in {lang}.\n\n"
     "{context}\n"
     "Question: {question}\n"
@@ -55,7 +55,8 @@ DEFAULT_QA_TABLE_PROMPT = (
     "If you don't know the answer, just say that you don't know, "
     "don't try to make up an answer. Answer directly; do not start with phrases like "
     "'according to the provided context', 'based on the context', "
-    "'根据提供的上下文', '根据上下文', or '基于资料'. Give answer in {lang}.\n\n"
+    "'根据知识', '根据知识库', '根据提供的上下文', '根据上下文', or '基于资料'. "
+    "Give answer in {lang}.\n\n"
     "Context:\n"
     "{context}\n"
     "Question: {question}\n"
@@ -68,7 +69,7 @@ DEFAULT_QA_CHATBOT_PROMPT = (
     "just say that you don't know. Keep the answer as concise as possible. "
     "Answer directly; do not start with phrases like "
     "'according to the provided context', 'based on the context', "
-    "'根据提供的上下文', '根据上下文', or '基于资料'. "
+    "'根据知识', '根据知识库', '根据提供的上下文', '根据上下文', or '基于资料'. "
     "Give answer in {lang}.\n\n"
     "Context:\n"
     "{context}\n"
@@ -81,7 +82,7 @@ DEFAULT_QA_FIGURE_PROMPT = (
     "If you don't know the answer, just say that you don't know. "
     "Answer directly; do not start with phrases like "
     "'according to the provided context', 'based on the context', "
-    "'根据提供的上下文', '根据上下文', or '基于资料'. "
+    "'根据知识', '根据知识库', '根据提供的上下文', '根据上下文', or '基于资料'. "
     "Give answer in {lang}.\n\n"
     "Context: \n"
     "{context}\n"
@@ -392,7 +393,7 @@ class AnswerWithContextPipeline(BaseComponent):
             # add to display list
             with_citation.append(
                 Document(
-                    channel="info",
+                    channel="citation",
                     content=Render.collapsible_with_header_score(
                         cur_doc,
                         override_text=text,
@@ -420,7 +421,7 @@ class AnswerWithContextPipeline(BaseComponent):
             )
             without_citation.append(
                 Document(
-                    channel="info",
+                    channel="citation",
                     content=Render.collapsible_with_header_score(
                         doc, open_collapsible=is_open
                     ),

@@ -144,8 +144,42 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
                     flatten_doc_ids.append(doc_id)
             doc_ids = flatten_doc_ids
 
+        requested_doc_ids = doc_ids or []
+        trace_recorder = None
+        try:
+            from ktem.trace import get_active_recorder
+
+            trace_recorder = get_active_recorder()
+        except Exception:
+            trace_recorder = None
+
+        with Session(engine) as session:
+            pre_stmt = select(self.Index).where(
+                self.Index.relation_type == "document",
+                self.Index.source_id.in_(requested_doc_ids),
+            )
+            pre_filter_chunk_count = len(session.execute(pre_stmt).all())
+
+        if trace_recorder:
+            with trace_recorder.timer("acl_filter"):
+                doc_ids = self.PermissionService.filter_source_ids(
+                    self, requested_doc_ids, self.user_id
+                )
+        else:
+            doc_ids = self.PermissionService.filter_source_ids(
+                self, requested_doc_ids, self.user_id
+            )
         print("searching in doc_ids", doc_ids)
         if not doc_ids:
+            if trace_recorder:
+                trace_recorder.record_acl_filter(
+                    index=self,
+                    requested_source_ids=requested_doc_ids,
+                    allowed_source_ids=[],
+                    user_id=self.user_id,
+                    pre_chunk_count=pre_filter_chunk_count,
+                    post_chunk_count=0,
+                )
             logger.info(f"Skip retrieval because of no selected files: {self}")
             return []
 
@@ -157,6 +191,16 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
             )
             results = session.execute(stmt)
             chunk_ids = [r[0].target_id for r in results.all()]
+
+        if trace_recorder:
+            trace_recorder.record_acl_filter(
+                index=self,
+                requested_source_ids=requested_doc_ids,
+                allowed_source_ids=doc_ids,
+                user_id=self.user_id,
+                pre_chunk_count=pre_filter_chunk_count,
+                post_chunk_count=len(chunk_ids),
+            )
 
         # do first round top_k extension
         retrieval_kwargs["do_extend"] = True
@@ -180,7 +224,11 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
         # rerank
         s_time = time.time()
         print(f"retrieval_kwargs: {retrieval_kwargs.keys()}")
-        docs = self.vector_retrieval(text=text, top_k=self.top_k, **retrieval_kwargs)
+        if trace_recorder:
+            with trace_recorder.timer("retrieval"):
+                docs = self.vector_retrieval(text=text, top_k=self.top_k, **retrieval_kwargs)
+        else:
+            docs = self.vector_retrieval(text=text, top_k=self.top_k, **retrieval_kwargs)
         print("retrieval step took", time.time() - s_time)
 
         if not self.get_extra_table:
@@ -310,6 +358,8 @@ class IndexPipeline(BaseComponent):
     VS = Param(help="The VectorStore")
     DS = Param(help="The DocStore")
     FSPath = Param(help="The file storage path")
+    PermissionService = Param(help="The permission service")
+    index_id = Param(help="The index id")
     user_id = Param(help="The user id")
     collection_name: str = "default"
     private: bool = False
@@ -479,8 +529,10 @@ class IndexPipeline(BaseComponent):
         with Session(engine) as session:
             session.add(source)
             session.commit()
+            session.refresh(source)
             file_id = source.id
 
+        self.PermissionService.ensure_default_acl(self, source, self.user_id)
         return file_id
 
     def store_file(self, file_path: Path) -> str:
@@ -505,11 +557,38 @@ class IndexPipeline(BaseComponent):
         with Session(engine) as session:
             session.add(source)
             session.commit()
+            session.refresh(source)
             file_id = source.id
 
+        self.PermissionService.ensure_default_acl(self, source, self.user_id)
         return file_id
 
-    def finish(self, file_id: str, file_path: str | Path) -> str:
+    def replace_stored_file(self, file_id: str, file_path: Path) -> None:
+        """Replace stored file bytes while preserving the source id."""
+        with file_path.open("rb") as fi:
+            file_hash = sha256(fi.read()).hexdigest()
+
+        shutil.copy(file_path, self.FSPath / file_hash)
+        with Session(engine) as session:
+            result = session.execute(
+                select(self.Source).where(self.Source.id == file_id)
+            ).first()
+            if not result:
+                return
+            source = result[0]
+            source.path = file_hash
+            source.size = file_path.stat().st_size
+            source.date_created = datetime.now(get_localzone())
+            session.add(source)
+            session.commit()
+
+    def finish(
+        self,
+        file_id: str,
+        file_path: str | Path,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+    ) -> str:
         """Finish the indexing"""
         with Session(engine) as session:
             stmt = select(self.Source).where(self.Source.id == file_id)
@@ -532,6 +611,10 @@ class IndexPipeline(BaseComponent):
 
             # populate the note
             item.note["loader"] = self.get_from_path("loader").__class__.__name__
+            if chunk_size:
+                item.note["chunk_size"] = int(chunk_size)
+            if chunk_overlap is not None:
+                item.note["chunk_overlap"] = int(chunk_overlap)
 
             session.add(item)
             session.commit()
@@ -542,14 +625,13 @@ class IndexPipeline(BaseComponent):
         """Get the token function for calculating the number of tokens"""
         return _default_token_func
 
-    def delete_file(self, file_id: str):
-        """Delete a file from the db, including its chunks in docstore and vectorstore
+    def delete_file_chunks(self, file_id: str):
+        """Delete a file's chunks from docstore and vectorstore.
 
         Args:
             file_id: the file id
         """
         with Session(engine) as session:
-            session.execute(delete(self.Source).where(self.Source.id == file_id))
             vs_ids, ds_ids = [], []
             index = session.execute(
                 select(self.Index).where(self.Index.source_id == file_id)
@@ -566,6 +648,17 @@ class IndexPipeline(BaseComponent):
             self.VS.delete(vs_ids)
         if ds_ids:
             self.DS.delete(ds_ids)
+
+    def delete_file(self, file_id: str):
+        """Delete a file from the db, including its chunks in docstore and vectorstore.
+
+        Args:
+            file_id: the file id
+        """
+        self.delete_file_chunks(file_id)
+        with Session(engine) as session:
+            session.execute(delete(self.Source).where(self.Source.id == file_id))
+            session.commit()
 
     def run(
         self, file_path: str | Path, reindex: bool, **kwargs
@@ -593,8 +686,8 @@ class IndexPipeline(BaseComponent):
                     yield Document(
                         f" => Removing old {file_path.name}", channel="debug"
                     )
-                    self.delete_file(file_id)
-                    file_id = self.store_file(file_path)
+                    self.delete_file_chunks(file_id)
+                    self.replace_stored_file(file_id, file_path)
             else:
                 # add record to db
                 file_id = self.store_file(file_path)
@@ -621,7 +714,16 @@ class IndexPipeline(BaseComponent):
         yield Document(f" => Converted {file_name} to text", channel="debug")
         yield from self.handle_docs(docs, file_id, file_name)
 
-        self.finish(file_id, file_path)
+        self.finish(
+            file_id,
+            file_path,
+            chunk_size=int(self.splitter._kwargs.get("chunk_size", 0))
+            if self.splitter
+            else None,
+            chunk_overlap=int(self.splitter._kwargs.get("chunk_overlap", 0))
+            if self.splitter
+            else None,
+        )
 
         yield Document(f" => Finished indexing {file_name}", channel="debug")
         return file_id, docs
@@ -735,6 +837,14 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
 
         chunk_size = self.chunk_size or dev_chunk_size
         chunk_overlap = self.chunk_overlap or dev_chunk_overlap
+        chunk_size = int(chunk_size or 1024)
+        chunk_overlap = int(chunk_overlap if chunk_overlap is not None else 256)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than 0")
+        if chunk_overlap < 0:
+            raise ValueError("chunk_overlap must be greater than or equal to 0")
+        if chunk_overlap >= chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
 
         # check if file_path is a URL
         if self.is_url(file_path):
@@ -755,8 +865,8 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
         pipeline: IndexPipeline = IndexPipeline(
             loader=reader,
             splitter=TokenSplitter(
-                chunk_size=chunk_size or 1024,
-                chunk_overlap=chunk_overlap or 256,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
                 separator="\n\n",
                 backup_separators=["\n", ".", "\u200B"],
             ),
@@ -766,6 +876,8 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
             VS=self.VS,
             DS=self.DS,
             FSPath=self.FSPath,
+            PermissionService=self.PermissionService,
+            index_id=self.index_id,
             user_id=self.user_id,
             private=self.private,
             embedding=self.embedding,

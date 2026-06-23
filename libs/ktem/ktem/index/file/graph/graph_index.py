@@ -25,7 +25,10 @@ class GraphRAGIndex(FileIndex):
     def get_retriever_pipelines(
         self, settings: dict, user_id: int, selected: Any = None
     ) -> list["BaseFileIndexRetriever"]:
-        file_ids = self._selector_ui.get_selected_ids(selected)
+        if hasattr(self._selector_ui, "get_selected_ids_for_user"):
+            file_ids = self._selector_ui.get_selected_ids_for_user(selected, user_id)
+        else:
+            file_ids = self._selector_ui.get_selected_ids(selected)
         retrievers = [
             GraphRAGRetrieverPipeline(
                 file_ids=file_ids,

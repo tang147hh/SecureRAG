@@ -1,10 +1,11 @@
 import os
+from pathlib import Path
 
-import gradio as gr
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from decouple import config
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.config import Config
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
@@ -44,23 +45,31 @@ def add_session_middleware(app):
 
 
 from ktem.main import App  # noqa
+from ktem.react_api import register_react_api  # noqa
 
-gradio_app = App()
-main_demo = gradio_app.make()
+runtime = App()
+runtime.make()
 
 app = FastAPI()
+register_react_api(app, runtime)
 oauth = add_session_middleware(app)
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent / "frontend" / "dist"
+if FRONTEND_DIST_DIR.exists():
+    app.mount(
+        "/app",
+        StaticFiles(directory=str(FRONTEND_DIST_DIR), html=True),
+        name="react-frontend",
+    )
 
 
 @app.get("/")
-def public(request: Request):
-    root_url = gr.route_utils.get_root_url(request, "/", None)
-    return RedirectResponse(url=f"{root_url}/app/")
+def public():
+    return RedirectResponse(url="/app/")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    return FileResponse(gradio_app._favicon)
+    return FileResponse(runtime._favicon)
 
 
 @app.route("/logout")
@@ -71,8 +80,7 @@ async def logout(request: Request):
 
 @app.route("/login")
 async def login(request: Request):
-    root_url = gr.route_utils.get_root_url(request, "/login", None)
-    redirect_uri = f"{root_url}/auth"
+    redirect_uri = str(request.url_for("auth"))
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
@@ -84,14 +92,3 @@ async def auth(request: Request):
         return RedirectResponse(url="/")
     request.session["user"] = dict(access_token)["userinfo"]
     return RedirectResponse(url="/")
-
-
-app = gr.mount_gradio_app(
-    app,
-    main_demo,
-    path="/app",
-    allowed_paths=[
-        "libs/ktem/ktem/assets",
-        GRADIO_TEMP_DIR,
-    ],
-)

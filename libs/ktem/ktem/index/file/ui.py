@@ -14,6 +14,7 @@ from gradio.data_classes import FileData
 from gradio.utils import NamedString
 from ktem.app import BasePage
 from ktem.db.engine import engine
+from ktem.permissions import can_read_source, filter_source_ids
 from ktem.utils.render import Render
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -1344,7 +1345,7 @@ class FileIndexPage(BasePage):
                 .route(file_path)
                 .get_id_if_exists(file_path)
             )
-            if exist_id:
+            if exist_id and not reindex:
                 ordered_ids.append(exist_id)
             else:
                 ordered_ids.append(None)
@@ -1353,7 +1354,7 @@ class FileIndexPage(BasePage):
 
         settings = deepcopy(settings)
         settings[f"index.options.{self._index.id}.reader_mode"] = "default"
-        settings[f"index.options.{self._index.id}.quick_index_mode"] = True
+        settings.setdefault(f"index.options.{self._index.id}.quick_index_mode", True)
         if to_process_files:
             _iter = self.index_fn(to_process_files, [], reindex, settings, user_id)
             try:
@@ -1925,16 +1926,23 @@ class FileSelector(BasePage):
 
         file_ids = []
         with Session(engine) as session:
-            statement = select(self._index._resources["Source"].id)
-            if self._index.config.get("private", False):
-                statement = statement.where(
-                    self._index._resources["Source"].user == user_id
-                )
+            Source = self._index._resources["Source"]
+            statement = select(Source)
             results = session.execute(statement).all()
-            for (id,) in results:
-                file_ids.append(id)
+            for (source,) in results:
+                if can_read_source(self._index, source, user_id):
+                    file_ids.append(source.id)
 
         return file_ids
+
+    def get_selected_ids_for_user(self, components, user_id):
+        if not components:
+            return []
+        if len(components) < 3:
+            components = tuple(components) + (user_id,)
+        else:
+            components = (components[0], components[1], user_id)
+        return self.get_selected_ids(components)
 
     def load_files(self, selected_files, user_id):
         options: list = []
@@ -1957,6 +1965,8 @@ class FileSelector(BasePage):
 
             results = session.execute(statement).all()
             for result in results:
+                if not can_read_source(self._index, result[0], user_id):
+                    continue
                 available_ids.append(result[0].id)
                 options.append((result[0].name, result[0].id))
 
@@ -1968,8 +1978,11 @@ class FileSelector(BasePage):
             results = session.execute(statement).all()
             for result in results:
                 item = result[0]
+                group_file_ids = filter_source_ids(
+                    self._index, item.data.get("files", []), user_id
+                )
                 options.append(
-                    (f"目录: {item.name}", json.dumps(item.data.get("files", [])))
+                    (f"目录: {item.name}", json.dumps(group_file_ids))
                 )
 
         if selected_files:

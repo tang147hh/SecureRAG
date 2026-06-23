@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,7 @@ from ...utils.commands import WEB_SEARCH_COMMAND
 from ...utils.hf_papers import get_recommended_papers
 from ...utils.rate_limit import check_rate_limit
 from .chat_panel import ChatPanel
+from .chat_panel import DEMO_CITATION_PANEL
 from .chat_suggestion import ChatSuggestion
 from .common import STATE
 from .control import ConversationControl
@@ -66,25 +68,67 @@ DEFAULT_QUESTION = (
 )
 DEFAULT_PROMPT_TEMPLATE_NAME = "默认 RAG"
 DEFAULT_PROMPT_TEMPLATE_TEXT = (
-    "You are a careful RAG assistant. Answer in {lang} using only the provided "
-    "context when context is available. If the context is insufficient, say what "
-    "is missing and avoid inventing facts.\n\n"
+    "You are a careful RAG assistant. Answer directly in {lang}. Use the provided "
+    "material when it is available, but do not mention the material, context, "
+    "knowledge base, or documents in the opening phrase. If the material is "
+    "insufficient, say what is missing and avoid inventing facts.\n\n"
     "Context:\n{context}\n\nQuestion: {question}\nAnswer:"
 )
 DEFAULT_PROMPT_TEMPLATES = {
     DEFAULT_PROMPT_TEMPLATE_NAME: DEFAULT_PROMPT_TEMPLATE_TEXT,
     "严格引用": (
-        "Answer in {lang}. Base the answer strictly on the context below. "
+        "Answer directly in {lang}. Base the answer strictly on the material below, "
+        "but do not start by mentioning the context, knowledge base, or documents. "
         "When the context does not contain the answer, say that the documents do "
         "not provide enough information.\n\nContext:\n{context}\n\nQuestion: "
         "{question}\nAnswer:"
     ),
 }
 
+ANSWER_OPENING_BOILERPLATE_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:根据|依据|基于|按照)(?:提供的|给定的|上述|以上|相关)?"
+    r"(?:知识库|知识|上下文|语境|资料|材料|文档|文件|内容|信息)"
+    r"(?:可知|来看|显示|内容|信息|中的信息|中的内容|提供的信息|提供的内容)?"
+    r"|从(?:提供的|给定的|上述|以上|相关)?"
+    r"(?:知识库|知识|上下文|语境|资料|材料|文档|文件|内容|信息)(?:来看|可知)"
+    r"|according to (?:the )?(?:provided )?"
+    r"(?:context|knowledge base|documents?|materials?|information)"
+    r"|based on (?:the )?(?:provided )?"
+    r"(?:context|knowledge base|documents?|materials?|information)"
+    r"|from (?:the )?(?:provided )?"
+    r"(?:context|knowledge base|documents?|materials?|information)"
+    r")\s*(?:[,，。:：；;]\s*)*",
+    re.IGNORECASE,
+)
+
 chat_input_focus_js = """
 function() {
+    if (window.khChatFocusComposer) {
+        window.khChatFocusComposer();
+        return;
+    }
     let chatInput = document.querySelector("#chat-input textarea");
-    chatInput.focus();
+    if (chatInput) {
+        chatInput.focus();
+    }
+}
+"""
+
+chat_submit_done_js = """
+function() {
+    const setBusy = window.khChatSetBusy || globalThis.khChatSetBusy;
+    if (setBusy) {
+        setBusy(false);
+    } else {
+        document.body.classList.remove("kh-chat-busy");
+        document.querySelector("#chat-area")?.classList.remove("is-chat-submitting");
+        document.querySelector("#chat-input")?.classList.remove("is-submitting");
+    }
+    const focusComposer = window.khChatFocusComposer || globalThis.khChatFocusComposer;
+    if (focusComposer) {
+        focusComposer();
+    }
 }
 """
 
@@ -239,7 +283,7 @@ class ChatPage(BasePage):
         self._user_api_key = gr.Text(value="", visible=False)
 
     def on_building_ui(self):
-        with gr.Row():
+        with gr.Row(elem_id="packy-chat-shell"):
             self.state_chat = gr.State(STATE)
             self.state_retrieval_history = gr.State([])
             self.state_plot_history = gr.State([])
@@ -295,7 +339,11 @@ class ChatPage(BasePage):
                         "快速上传" if not KH_DEMO_MODE else "或输入新的 paper URL"
                     )
 
-                    with gr.Accordion(label=quick_upload_label, open=False) as _:
+                    with gr.Accordion(
+                        label=quick_upload_label,
+                        open=True,
+                        elem_id="quick-upload-expand",
+                    ) as _:
                         self.quick_file_upload_status = gr.Markdown()
                         if not KH_DEMO_MODE:
                             self.quick_file_upload = File(
@@ -492,7 +540,10 @@ class ChatPage(BasePage):
                 ):
                     self.modal = gr.HTML("<div id='pdf-modal'></div>")
                     self.plot_panel = gr.Plot(visible=False)
-                    self.info_panel = gr.HTML(elem_id="html-info-panel")
+                    self.info_panel = gr.HTML(
+                        value=DEMO_CITATION_PANEL,
+                        elem_id="html-info-panel",
+                    )
 
         self.followup_questions = self.chat_suggestion.examples
         self.followup_questions_ui = self.chat_suggestion.accordion
@@ -507,6 +558,32 @@ class ChatPage(BasePage):
 
     def _prompt_store_path(self):
         return flowsettings.KH_USER_DATA_DIR / "prompt_templates.json"
+
+    def _chat_runtime_settings_path(self):
+        return flowsettings.KH_USER_DATA_DIR / "chat_runtime_settings.json"
+
+    def _read_chat_runtime_settings(self) -> dict:
+        store_path = self._chat_runtime_settings_path()
+        if not store_path.exists():
+            return {}
+        try:
+            with store_path.open(encoding="utf-8") as fi:
+                return json.load(fi)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"Failed to read chat runtime settings: {e}")
+            return {}
+
+    def _write_chat_runtime_settings(self, data: dict):
+        store_path = self._chat_runtime_settings_path()
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            delete=False,
+            dir=store_path.parent,
+        ) as fo:
+            json.dump(data, fo, ensure_ascii=False, indent=2)
+            temp_path = fo.name
+        os.replace(temp_path, store_path)
 
     def _load_prompt_template_map(self, user_id) -> dict[str, str]:
         user_key = str(user_id or "default")
@@ -586,8 +663,103 @@ class ChatPage(BasePage):
             templates.get(selected_name, DEFAULT_PROMPT_TEMPLATE_TEXT),
         )
 
+    def load_chat_runtime_settings(self, user_id):
+        user_key = str(user_id or "default")
+        settings = self._read_chat_runtime_settings().get(user_key, {})
+        templates = self._load_prompt_template_map(user_id)
+        selected_template = settings.get(
+            "prompt_template_select",
+            next(iter(templates), DEFAULT_PROMPT_TEMPLATE_NAME),
+        )
+        if selected_template not in templates:
+            selected_template = next(iter(templates), DEFAULT_PROMPT_TEMPLATE_NAME)
+        use_mindmap = settings.get("use_mindmap", True)
+
+        return (
+            gr.update(value=settings.get("reasoning_type") or "simple"),
+            gr.update(value=settings.get("model_type") or ""),
+            gr.update(value=settings.get("language", "zh")),
+            gr.update(value=settings.get("citation", "highlight")),
+            gr.update(value=use_mindmap),
+            gr.update(
+                value=use_mindmap,
+                label="Mindmap" + ("（开）" if use_mindmap else "（关）"),
+            ),
+            gr.update(value=settings.get("retrieval_top_k", 10)),
+            gr.update(value=settings.get("first_round_multiplier", 10)),
+            gr.update(value=settings.get("retrieval_mode", "hybrid")),
+            gr.update(value=settings.get("use_reranking", False)),
+            gr.update(value=settings.get("use_llm_reranking", False)),
+            gr.update(value=settings.get("use_mmr", False)),
+            gr.update(value=settings.get("prioritize_table", False)),
+            templates,
+            gr.update(choices=list(templates.keys()), value=selected_template),
+            selected_template,
+            templates.get(selected_template, DEFAULT_PROMPT_TEMPLATE_TEXT),
+        )
+
+    def save_chat_runtime_settings(
+        self,
+        user_id,
+        reasoning_type,
+        model_type,
+        language,
+        citation,
+        use_mindmap,
+        retrieval_top_k,
+        first_round_multiplier,
+        retrieval_mode,
+        use_reranking,
+        use_llm_reranking,
+        use_mmr,
+        prioritize_table,
+        prompt_template_select,
+    ):
+        data = self._read_chat_runtime_settings()
+        user_key = str(user_id or "default")
+        data[user_key] = {
+            "reasoning_type": reasoning_type,
+            "model_type": "" if model_type in (DEFAULT_SETTING, None) else model_type,
+            "language": language,
+            "citation": citation,
+            "use_mindmap": bool(use_mindmap),
+            "retrieval_top_k": retrieval_top_k,
+            "first_round_multiplier": first_round_multiplier,
+            "retrieval_mode": retrieval_mode,
+            "use_reranking": bool(use_reranking),
+            "use_llm_reranking": bool(use_llm_reranking),
+            "use_mmr": bool(use_mmr),
+            "prioritize_table": bool(prioritize_table),
+            "prompt_template_select": prompt_template_select or DEFAULT_PROMPT_TEMPLATE_NAME,
+        }
+        self._write_chat_runtime_settings(data)
+
     def format_answer_with_refs(self, text, refs, placeholder):
-        return text or placeholder
+        return self.strip_answer_opening_boilerplate(text) or placeholder
+
+    def format_citation_panel(self, refs):
+        if not refs:
+            return ""
+        return (
+            "<section class='packy-reference-panel packy-live-reference-panel'>"
+            "<div class='packy-reference-head'><h3>信息面板</h3></div>"
+            "<section class='chat-reference-box'>"
+            "<details open>"
+            "<summary>引用依据</summary>"
+            f"<div class='chat-reference-content'>{refs}</div>"
+            "</details>"
+            "</section>"
+            "</section>"
+        )
+
+    @staticmethod
+    def strip_answer_opening_boilerplate(text: str) -> str:
+        previous = None
+        stripped = text or ""
+        while previous != stripped:
+            previous = stripped
+            stripped = ANSWER_OPENING_BOILERPLATE_RE.sub("", stripped, count=1)
+        return stripped
 
     def render_diagnostics_panel(self, diagnostics: dict) -> str:
         retrieval = diagnostics.get("retrieval", {})
@@ -678,6 +850,38 @@ class ChatPage(BasePage):
                 ],
                 concurrency_limit=20,
                 show_progress="hidden",
+                js="""
+                function(
+                    chatInput,
+                    chatHistory,
+                    userId,
+                    settings,
+                    conversationId,
+                    conversationName,
+                    firstSelectorChoices
+                ) {
+                    const hasText = Boolean(chatInput && chatInput.text && chatInput.text.trim());
+                    const hasFiles = Boolean(chatInput && chatInput.files && chatInput.files.length);
+                    const busy = hasText || hasFiles;
+                    const setBusy = window.khChatSetBusy || globalThis.khChatSetBusy;
+                    if (setBusy) {
+                        setBusy(busy);
+                    } else {
+                        document.body.classList.toggle("kh-chat-busy", busy);
+                        document.querySelector("#chat-area")?.classList.toggle("is-chat-submitting", busy);
+                        document.querySelector("#chat-input")?.classList.toggle("is-submitting", busy);
+                    }
+                    return [
+                        chatInput,
+                        chatHistory,
+                        userId,
+                        settings,
+                        conversationId,
+                        conversationName,
+                        firstSelectorChoices
+                    ];
+                }
+                """,
             )
             .success(
                 fn=self.chat_fn,
@@ -705,6 +909,7 @@ class ChatPage(BasePage):
                 + self._indices_input,
                 outputs=[
                     self.chat_panel.chatbot,
+                    self.chat_panel.citation_panel,
                     self.info_panel,
                     self.plot_panel,
                     self.state_plot_panel,
@@ -744,6 +949,23 @@ class ChatPage(BasePage):
             )
         )
 
+        chat_runtime_inputs = [
+            self._app.user_id,
+            self.reasoning_type,
+            self.model_type,
+            self.language,
+            self.citation,
+            self.use_mindmap_check,
+            self.retrieval_top_k,
+            self.first_round_multiplier,
+            self.retrieval_mode,
+            self.use_reranking,
+            self.use_llm_reranking,
+            self.use_mmr,
+            self.prioritize_table,
+            self.prompt_template_select,
+        ]
+
         self.prompt_template_select.change(
             self.select_prompt_template,
             inputs=[self.prompt_templates_state, self.prompt_template_select],
@@ -765,6 +987,11 @@ class ChatPage(BasePage):
                 self.prompt_template_text,
             ],
             show_progress="hidden",
+        ).then(
+            self.save_chat_runtime_settings,
+            inputs=chat_runtime_inputs,
+            outputs=None,
+            show_progress="hidden",
         )
         self.prompt_template_delete.click(
             self.delete_prompt_template,
@@ -780,7 +1007,34 @@ class ChatPage(BasePage):
                 self.prompt_template_text,
             ],
             show_progress="hidden",
+        ).then(
+            self.save_chat_runtime_settings,
+            inputs=chat_runtime_inputs,
+            outputs=None,
+            show_progress="hidden",
         )
+
+        for component in [
+            self.reasoning_type,
+            self.model_type,
+            self.language,
+            self.citation,
+            self.use_mindmap_check,
+            self.retrieval_top_k,
+            self.first_round_multiplier,
+            self.retrieval_mode,
+            self.use_reranking,
+            self.use_llm_reranking,
+            self.use_mmr,
+            self.prioritize_table,
+            self.prompt_template_select,
+        ]:
+            component.change(
+                self.save_chat_runtime_settings,
+                inputs=chat_runtime_inputs,
+                outputs=None,
+                show_progress="hidden",
+            )
 
         onSuggestChatEvent = {
             "fn": self.suggest_chat_conv,
@@ -806,7 +1060,7 @@ class ChatPage(BasePage):
                 inputs=[
                     self.chat_control.conversation_id,
                     self._app.user_id,
-                    self.info_panel,
+                    self.chat_panel.citation_panel,
                     self.state_plot_panel,
                     self.state_retrieval_history,
                     self.state_plot_history,
@@ -820,6 +1074,13 @@ class ChatPage(BasePage):
                 ],
                 concurrency_limit=20,
             )
+
+        chat_event.then(
+            fn=None,
+            inputs=None,
+            outputs=None,
+            js=chat_submit_done_js,
+        )
 
         self.chat_control.btn_info_expand.click(
             fn=None,
@@ -844,7 +1105,7 @@ class ChatPage(BasePage):
                     self.chat_control.conversation_rn,
                     self.chat_panel.chatbot,
                     self.followup_questions,
-                    self.info_panel,
+                    self.chat_panel.citation_panel,
                     self.state_plot_panel,
                     self.state_retrieval_history,
                     self.state_plot_history,
@@ -862,6 +1123,17 @@ class ChatPage(BasePage):
             )
 
         if not KH_DEMO_MODE:
+            self.chat_control.btn_new_top.click(
+                fn=None,
+                inputs=None,
+                outputs=None,
+                js="""
+                function() {
+                    document.querySelector("#new-conv-button")?.click();
+                }
+                """,
+                show_progress="hidden",
+            )
             self.chat_control.btn_new.click(
                 self.chat_control.new_conv,
                 inputs=self._app.user_id,
@@ -879,7 +1151,7 @@ class ChatPage(BasePage):
                     self.chat_control.conversation_rn,
                     self.chat_panel.chatbot,
                     self.followup_questions,
-                    self.info_panel,
+                    self.chat_panel.citation_panel,
                     self.state_plot_panel,
                     self.state_retrieval_history,
                     self.state_plot_history,
@@ -923,7 +1195,7 @@ class ChatPage(BasePage):
                     self.chat_control.conversation_rn,
                     self.chat_panel.chatbot,
                     self.followup_questions,
-                    self.info_panel,
+                    self.chat_panel.citation_panel,
                     self.state_plot_panel,
                     self.state_retrieval_history,
                     self.state_plot_history,
@@ -982,7 +1254,7 @@ class ChatPage(BasePage):
                     self.chat_control.conversation_rn,
                     self.chat_panel.chatbot,
                     self.followup_questions,
-                    self.info_panel,
+                    self.chat_panel.citation_panel,
                     self.state_plot_panel,
                     self.state_retrieval_history,
                     self.state_plot_history,
@@ -1035,7 +1307,7 @@ class ChatPage(BasePage):
                     self.state_plot_history,
                 ],
                 outputs=[
-                    self.info_panel,
+                    self.chat_panel.citation_panel,
                     self.state_plot_panel,
                 ],
             ).then(
@@ -1073,7 +1345,7 @@ class ChatPage(BasePage):
                     self.chat_panel.chatbot,
                     self._app.settings_state,
                     self._app.user_id,
-                    self.info_panel,
+                    self.chat_panel.citation_panel,
                     self.state_chat,
                 ]
                 + self._indices_input,
@@ -1386,7 +1658,7 @@ class ChatPage(BasePage):
                         self.chat_control.conversation_rn,
                         self.chat_panel.chatbot,
                         self.followup_questions,
-                        self.info_panel,
+                        self.chat_panel.citation_panel,
                         self.state_plot_panel,
                         self.state_retrieval_history,
                         self.state_plot_history,
@@ -1402,9 +1674,22 @@ class ChatPage(BasePage):
                     self._app.subscribe_event(
                         name=event_name,
                         definition={
-                            "fn": self.load_prompt_templates,
+                            "fn": self.load_chat_runtime_settings,
                             "inputs": [self._app.user_id],
                             "outputs": [
+                                self.reasoning_type,
+                                self.model_type,
+                                self.language,
+                                self.citation,
+                                self.use_mindmap,
+                                self.use_mindmap_check,
+                                self.retrieval_top_k,
+                                self.first_round_multiplier,
+                                self.retrieval_mode,
+                                self.use_reranking,
+                                self.use_llm_reranking,
+                                self.use_mmr,
+                                self.prioritize_table,
                                 self.prompt_templates_state,
                                 self.prompt_template_select,
                                 self.prompt_template_name,
@@ -1437,9 +1722,22 @@ class ChatPage(BasePage):
             )
         elif not KH_DEMO_MODE:
             self._app.app.load(
-                self.load_prompt_templates,
+                self.load_chat_runtime_settings,
                 inputs=[self._app.user_id],
                 outputs=[
+                    self.reasoning_type,
+                    self.model_type,
+                    self.language,
+                    self.citation,
+                    self.use_mindmap,
+                    self.use_mindmap_check,
+                    self.retrieval_top_k,
+                    self.first_round_multiplier,
+                    self.retrieval_mode,
+                    self.use_reranking,
+                    self.use_llm_reranking,
+                    self.use_mmr,
+                    self.prioritize_table,
                     self.prompt_templates_state,
                     self.prompt_template_select,
                     self.prompt_template_name,
@@ -1467,12 +1765,12 @@ class ChatPage(BasePage):
         # if not regen, then append the new message
         if not state["app"].get("regen", False):
             retrival_history = retrival_history + [retrieval_msg]
-            plot_history = plot_history + [plot_data]
+            plot_history = plot_history + [None]
         else:
             if retrival_history:
                 print("Updating retrieval history (regen=True)")
                 retrival_history[-1] = retrieval_msg
-                plot_history[-1] = plot_data
+                plot_history[-1] = None
 
         # reset regen state
         state["app"]["regen"] = False
@@ -1531,14 +1829,11 @@ class ChatPage(BasePage):
     def message_selected(self, retrieval_history, plot_history, msg: gr.SelectData):
         index = msg.index[0]
         try:
-            retrieval_content, plot_content = (
-                retrieval_history[index],
-                plot_history[index],
-            )
+            retrieval_content = retrieval_history[index]
         except IndexError:
-            retrieval_content, plot_content = gr.update(), None
+            retrieval_content = gr.update()
 
-        return retrieval_content, plot_content
+        return retrieval_content, None
 
     def create_pipeline(
         self,
@@ -1651,12 +1946,12 @@ class ChatPage(BasePage):
             retrievers.append(web_search)
         else:
             for index in self._app.index_manager.indices:
-                index_selected = []
                 if isinstance(index.selector, int):
                     index_selected = selecteds[index.selector]
-                if isinstance(index.selector, tuple):
-                    for i in index.selector:
-                        index_selected.append(selecteds[i])
+                elif isinstance(index.selector, tuple):
+                    index_selected = tuple(selecteds[i] for i in index.selector)
+                else:
+                    index_selected = None
                 iretrievers = index.get_retriever_pipelines(
                     settings, user_id, index_selected
                 )
@@ -1755,6 +2050,7 @@ class ChatPage(BasePage):
         refs = ""
         info_panel_content = ""
         plot, plot_gr = None, gr.update(visible=False)
+        citation_panel_content = ""
         msg_placeholder = getattr(
             flowsettings, "KH_CHAT_MSG_PLACEHOLDER", "Thinking ..."
         )
@@ -1762,6 +2058,7 @@ class ChatPage(BasePage):
         yield (
             chat_history
             + [(display_input, self.format_answer_with_refs(text, refs, msg_placeholder))],
+            citation_panel_content,
             info_panel_content,
             plot_gr,
             plot,
@@ -1791,15 +2088,13 @@ class ChatPage(BasePage):
                     info_panel_content = self.append_info_content(
                         info_panel_content, response.content
                     )
-                    if not (
-                        isinstance(response.content, dict)
-                        and response.content.get("type") == "diagnostics"
-                    ):
-                        refs = self.append_info_content(refs, response.content)
+
+                if response.channel == "citation":
+                    refs = self.append_info_content(refs, response.content)
+                    citation_panel_content = self.format_citation_panel(refs)
 
                 if response.channel == "plot":
-                    plot = response.content
-                    plot_gr = self._json_to_plot(plot)
+                    plot, plot_gr = None, gr.update(visible=False)
 
                 chat_state[pipeline.get_info()["id"]] = reasoning_state["pipeline"]
 
@@ -1811,6 +2106,7 @@ class ChatPage(BasePage):
                             self.format_answer_with_refs(text, refs, msg_placeholder),
                         )
                     ],
+                    citation_panel_content,
                     info_panel_content,
                     plot_gr,
                     plot,
@@ -1827,6 +2123,7 @@ class ChatPage(BasePage):
             yield (
                 chat_history
                 + [(display_input, self.format_answer_with_refs(text, refs, empty_msg))],
+                citation_panel_content,
                 info_panel_content,
                 plot_gr,
                 plot,

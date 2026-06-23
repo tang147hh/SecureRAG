@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Optional, Sequence, cast
@@ -236,13 +237,28 @@ class VectorRetrieval(BaseRetrieval):
             print(f"Got {len(vs_docs)} from vectorstore")
             print(f"Got {len(ds_docs)} from docstore")
 
-        # use additional reranker to re-order the document list
+        trace_recorder = None
+        try:
+            from ktem.trace import get_active_recorder
+
+            trace_recorder = get_active_recorder()
+        except Exception:
+            trace_recorder = None
+
+        before_rerank = list(result)
+        rerank_started = time.perf_counter()
         if self.rerankers and text:
             for reranker in self.rerankers:
                 # if reranker is LLMReranking, limit the document with top_k items only
                 if isinstance(reranker, LLMReranking):
                     result = self._filter_docs(result, top_k=top_k)
                 result = reranker.run(documents=result, query=text)
+        if trace_recorder:
+            if self.rerankers and text:
+                trace_recorder.add_duration(
+                    "rerank", int((time.perf_counter() - rerank_started) * 1000)
+                )
+            trace_recorder.record_rerank(before_rerank, result)
 
         result = self._filter_docs(result, top_k=top_k)
         print(f"Got raw {len(result)} retrieved documents")

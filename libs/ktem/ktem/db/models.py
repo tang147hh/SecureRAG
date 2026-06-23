@@ -1,5 +1,8 @@
 import ktem.db.base_models as base_models
 from ktem.db.engine import engine
+from ktem.evaluation.models import RagEvalDataset, RagEvalExample, RagEvalRun  # noqa: F401
+from ktem.permissions.models import SourcePermission  # noqa: F401
+from ktem.trace.models import RagTraceRun  # noqa: F401
 from sqlmodel import SQLModel
 from theflow.settings import settings
 from theflow.utils.modules import import_dotted_string

@@ -11,6 +11,9 @@ class BaseFileIndexRetriever(BaseComponent):
     VS = Param(help="The VectorStore")
     DS = Param(help="The DocStore")
     FSPath = Param(help="The file storage path")
+    PermissionService = Param(help="The permission service")
+    index_id = Param(help="The index id")
+    private = Param(False, help="Whether this is private index")
     user_id = Param(help="The user id")
 
     @classmethod
@@ -53,6 +56,8 @@ class BaseFileIndexIndexing(BaseComponent):
     VS = Param(help="The VectorStore")
     DS = Param(help="The DocStore")
     FSPath = Param(help="The file storage path")
+    PermissionService = Param(help="The permission service")
+    index_id = Param(help="The index id")
     user_id = Param(help="The user id")
     private = Param(False, help="Whether this is private index")
     chunk_size = Param(help="Chunk size for this index")

@@ -5,6 +5,7 @@ from typing import Any, Optional, Type
 from ktem.components import filestorage_path, get_docstore, get_vectorstore
 from ktem.db.engine import engine
 from ktem.index.base import BaseIndex
+from ktem.permissions import permission_service
 from sqlalchemy import JSON, Column, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.mutable import MutableDict
@@ -160,6 +161,7 @@ class FileIndex(BaseIndex):
             "VectorStore": self._vs,
             "DocStore": self._docstore,
             "FileStoragePath": self._fs_path,
+            "PermissionService": permission_service,
         }
 
     def _setup_indexing_cls(self):
@@ -433,10 +435,15 @@ class FileIndex(BaseIndex):
         obj.VS = self._vs
         obj.DS = self._docstore
         obj.FSPath = self._fs_path
+        obj.PermissionService = self._resources["PermissionService"]
+        obj.index_id = self.id
         obj.user_id = user_id
         obj.private = self.config.get("private", False)
-        obj.chunk_size = self.config.get("chunk_size", 0)
-        obj.chunk_overlap = self.config.get("chunk_overlap", 0)
+        obj.chunk_size = stripped_settings.get("chunk_size", self.config.get("chunk_size", 0))
+        obj.chunk_overlap = stripped_settings.get(
+            "chunk_overlap",
+            self.config.get("chunk_overlap", 0),
+        )
 
         return obj
 
@@ -451,7 +458,16 @@ class FileIndex(BaseIndex):
                 stripped_settings[key[len(prefix) :]] = value
 
         # transform selected id
-        selected_ids: Optional[list[str]] = self._selector_ui.get_selected_ids(selected)
+        if hasattr(self._selector_ui, "get_selected_ids_for_user"):
+            selected_ids: Optional[list[str]] = self._selector_ui.get_selected_ids_for_user(
+                selected, user_id
+            )
+        else:
+            selected_ids = self._selector_ui.get_selected_ids(selected)
+        selected_ids = self._resources["PermissionService"].filter_source_ids(
+            self, selected_ids or [], user_id
+        )
+        print(f"File index {self.id} selected source ids: {selected_ids}")
 
         retrievers = []
         for cls in self._retriever_pipeline_cls:
@@ -463,6 +479,9 @@ class FileIndex(BaseIndex):
             obj.VS = self._vs
             obj.DS = self._docstore
             obj.FSPath = self._fs_path
+            obj.PermissionService = self._resources["PermissionService"]
+            obj.index_id = self.id
+            obj.private = self.config.get("private", False)
             obj.user_id = user_id
             retrievers.append(obj)
 
