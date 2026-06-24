@@ -169,6 +169,9 @@ export const apiClient = {
     return request<FileDetail>(`/files/${fileId}/reembed${query}`, { method: "POST" });
   },
 
+  deleteFile: (fileId: string) =>
+    request<void>(`/files/${fileId}`, { method: "DELETE" }),
+
   listFileWorkspace: () => request<FileWorkspaceState>("/files/workspace"),
 
   getFileDetail: (fileId: string, typeFilter = "all") =>

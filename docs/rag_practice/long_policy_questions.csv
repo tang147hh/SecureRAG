@@ -1,0 +1,14 @@
+id,question,expected_answer,expected_source,question_type,should_refuse
+LQ001,正式员工每年享有多少天带薪年假？,10 天带薪年假,long_policy_mixed.md 第二章 年假制度,fact,false
+LQ002,一次申请连续 5 天以上年假需要提前多久？,至少提前 10 个工作日,long_policy_mixed.md 第二章 年假制度,condition,false
+LQ003,试用期员工能否在试用期内申请年假？,原则上不能，特殊情况需直属主管和人力资源负责人共同审批,long_policy_mixed.md 第二章 年假制度,condition,false
+LQ004,大型行业会议的住宿标准可以上浮多少？,可以上浮 20%,long_policy_mixed.md 第四章 差旅和报销,condition,false
+LQ005,超过 90 天未提交的报销单是否受理？,原则上不再受理,long_policy_mixed.md 第四章 差旅和报销,condition,false
+LQ006,BX-2048 当前是什么状态？,待审批,long_policy_mixed.md 第五章 特殊报销编号,exact,false
+LQ007,BX-4096 为什么被退回？,缺少有效发票,long_policy_mixed.md 第五章 特殊报销编号,exact,false
+LQ008,财务系统临时访问权限最长有效期多久？,7 天,long_policy_mixed.md 第六章 财务系统权限,permission,false
+LQ009,付款审批模块谁可以访问？,财务主管和财务经理,long_policy_mixed.md 第六章 财务系统权限,permission,false
+LQ010,哪些文档不得设为公共文档？,包含薪酬、绩效、劳动合同、客户商业秘密的文档,long_policy_mixed.md 第七章 文档权限,permission,false
+LQ011,生产环境访问申请必须说明哪些内容？,访问目的、预计操作时间和回滚方案,long_policy_mixed.md 第八章 生产环境访问,condition,false
+LQ012,公司明年是否计划上市？,资料中没有提供相关信息,,no_answer,true
+

@@ -15,7 +15,8 @@ from uuid import uuid4
 from fastapi import APIRouter, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from llama_index.core.readers.file.base import default_file_metadata_func
+from sqlalchemy import delete, or_
 from sqlmodel import Session, select
 from theflow.settings import settings as flowsettings
 
@@ -31,6 +32,7 @@ from ktem.permissions import (
     resolve_principal,
     set_source_acl,
 )
+from ktem.permissions.models import SourcePermission
 from ktem.trace import (
     RagTraceRecorder,
     get_trace,
@@ -1304,19 +1306,157 @@ class ReactApiService:
             chunkOverlap=options.chunkOverlap if options else None,
             reindex=True,
         )
+        if (
+            options.chunkSize is not None
+            and options.chunkOverlap is not None
+            and options.chunkOverlap >= options.chunkSize
+        ):
+            raise HTTPException(status_code=400, detail="chunk_overlap 必须小于 chunk_size。")
+
+        before_detail = self.get_file_detail(file_id, user_id)
         temp_dir = Path(tempfile.mkdtemp(prefix="react-reembed-"))
-        upload_file = None
         try:
             temp_path = temp_dir / Path(source_name).name
             shutil.copy(stored_path, temp_path)
-            upload_file = _PathUploadFile(temp_path)
-            await self.upload_files([upload_file], user_id, None, options)
+            try:
+                await asyncio.to_thread(
+                    self.reindex_existing_file,
+                    file_id,
+                    user_id,
+                    temp_path,
+                    options,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"重新 embedding 失败：{exc}",
+                ) from exc
         finally:
-            if upload_file is not None:
-                upload_file.close()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-        return self.get_file_detail(file_id, user_id)
+        detail = self.get_file_detail(file_id, user_id)
+        if detail.chunkCount == 0:
+            prefix = (
+                "旧索引可能已被清空，"
+                if before_detail.chunkCount > 0
+                else ""
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"重新 embedding 未生成任何 chunk。{prefix}"
+                    "请检查后端索引日志，或删除后重新上传该文件。"
+                ),
+            )
+        return detail
+
+    def reindex_existing_file(
+        self,
+        file_id: str,
+        user_id: str,
+        file_path: Path,
+        options: UploadIndexingOptions,
+    ) -> None:
+        index = self._file_index()
+        settings = deepcopy(_load_user_settings(user_id, self.app_runtime))
+        settings[f"index.options.{index.id}.quick_index_mode"] = False
+        if options.chunkSize is not None:
+            settings[f"index.options.{index.id}.chunk_size"] = options.chunkSize
+        if options.chunkOverlap is not None:
+            settings[f"index.options.{index.id}.chunk_overlap"] = options.chunkOverlap
+
+        indexing_pipeline = index.get_indexing_pipeline(settings, user_id)
+        pipeline = indexing_pipeline.route(file_path)
+
+        self._delete_file_chunks(index, file_id)
+
+        file_name = file_path.name
+        extra_info = default_file_metadata_func(str(file_path))
+        extra_info["file_id"] = file_id
+        extra_info["collection_name"] = pipeline.collection_name
+
+        docs = pipeline.loader.load_data(file_path, extra_info=extra_info)
+        for _ in pipeline.handle_docs(docs, file_id, file_name):
+            pass
+        pipeline.finish(
+            file_id,
+            file_path,
+            chunk_size=int(pipeline.splitter._kwargs.get("chunk_size", 0))
+            if pipeline.splitter
+            else None,
+            chunk_overlap=int(pipeline.splitter._kwargs.get("chunk_overlap", 0))
+            if pipeline.splitter
+            else None,
+        )
+
+    def _delete_file_chunks(self, index: Any, file_id: str) -> None:
+        Index = index._resources["Index"]
+        vectorstore = index._resources["VectorStore"]
+        docstore = index._resources["DocStore"]
+        vs_ids: list[str] = []
+        ds_ids: list[str] = []
+        with Session(engine) as session:
+            rows = session.execute(
+                select(Index).where(Index.source_id == str(file_id))
+            ).all()
+            for (row,) in rows:
+                if row.relation_type == "vector":
+                    vs_ids.append(row.target_id)
+                elif row.relation_type == "document":
+                    ds_ids.append(row.target_id)
+                session.delete(row)
+            session.commit()
+
+        if vs_ids and vectorstore:
+            vectorstore.delete(vs_ids)
+        if ds_ids:
+            docstore.delete(ds_ids)
+
+    def delete_file(self, file_id: str, user_id: str) -> None:
+        index = self._file_index()
+        Source = index._resources["Source"]
+        stored_path: Path | None = None
+        stored_hash: str | None = None
+        with Session(engine) as session:
+            row = session.execute(select(Source).where(Source.id == file_id)).first()
+            if row is not None:
+                source = row[0]
+                if self._source_permission_label(index, source, user_id) != "owner":
+                    raise HTTPException(status_code=403, detail="只有文件所有者可以删除文件。")
+                stored_hash = str(source.path)
+                stored_path = index._resources["FileStoragePath"] / stored_hash
+
+        self._delete_file_chunks(index, file_id)
+        if stored_path is not None:
+            with Session(engine) as session:
+                still_referenced = session.execute(
+                    select(Source.id).where(
+                        Source.path == stored_hash,
+                        Source.id != str(file_id),
+                    )
+                ).first()
+            if still_referenced is None:
+                stored_path.unlink(missing_ok=True)
+
+        FileGroup = index._resources["FileGroup"]
+        with Session(engine) as session:
+            session.execute(
+                delete(SourcePermission).where(
+                    SourcePermission.index_id == int(index.id),
+                    SourcePermission.source_id == str(file_id),
+                )
+            )
+            session.execute(delete(Source).where(Source.id == str(file_id)))
+            group_statement = select(FileGroup)
+            for (group,) in session.execute(group_statement).all():
+                current = [str(item) for item in (group.data or {}).get("files", []) if item]
+                next_files = [item for item in current if item != file_id]
+                if next_files != current:
+                    group.data = {"files": next_files}
+                    session.add(group)
+            session.commit()
 
     def _append_exchange_to_db(
         self,
@@ -1798,15 +1938,6 @@ service = ReactApiService()
 router = APIRouter(prefix="/api/react", tags=["react-frontend"])
 
 
-class _PathUploadFile:
-    def __init__(self, path: Path) -> None:
-        self.filename = path.name
-        self.file = path.open("rb")
-
-    def close(self) -> None:
-        self.file.close()
-
-
 def _upload_indexing_options(
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
@@ -2030,13 +2161,6 @@ async def list_file_workspace(request: Request):
     return service.list_file_workspace(_require_user_id(request))
 
 
-@router.get("/files/{file_id}", response_model=FileDetail)
-async def get_file_detail(
-    file_id: str, request: Request, type_filter: str | None = None
-):
-    return service.get_file_detail(file_id, _require_user_id(request), type_filter)
-
-
 @router.patch("/files/{file_id}/permissions", response_model=FileDetail)
 async def update_file_permissions(
     file_id: str, payload: UpdateFilePermissionsPayload, request: Request
@@ -2065,6 +2189,19 @@ async def delete_file_directory(directory_id: str, request: Request):
 @router.post("/files/move", response_model=FileWorkspaceState)
 async def move_files(payload: MoveFilesPayload, request: Request):
     return service.move_files(payload, _require_user_id(request))
+
+
+@router.delete("/files/{file_id}")
+async def delete_file(file_id: str, request: Request):
+    service.delete_file(file_id, _require_user_id(request))
+    return {"ok": True}
+
+
+@router.get("/files/{file_id}", response_model=FileDetail)
+async def get_file_detail(
+    file_id: str, request: Request, type_filter: str | None = None
+):
+    return service.get_file_detail(file_id, _require_user_id(request), type_filter)
 
 
 @router.get("/settings", response_model=ChatSettings)

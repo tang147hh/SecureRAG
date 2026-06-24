@@ -213,6 +213,24 @@ function App() {
     }
   };
 
+  const handleDeleteFile = async (fileId: string) => {
+    try {
+      await apiClient.deleteFile(fileId);
+      const workspace = await apiClient.listFileWorkspace();
+      setFileDirectories(workspace.directories);
+      setFileItems(workspace.files);
+      setSelectedFileIds((current) => current.filter((id) => id !== fileId));
+      setActiveFileDetail((current) => (current?.file.id === fileId ? undefined : current));
+      const defaultReferences = await apiClient.listDefaultReferences();
+      setReferences(defaultReferences);
+      setActiveDocumentId((current) =>
+        current === fileId ? defaultReferences[0]?.id : current,
+      );
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "文件删除失败。");
+    }
+  };
+
   const handleCreateDirectory = async (name: string) => {
     try {
       await apiClient.createDirectory(name);
@@ -402,6 +420,7 @@ function App() {
             onUploadFiles={handleUploadFiles}
             onReembedFile={handleReembedFile}
             onCreateDirectory={handleCreateDirectory}
+            onDeleteFile={handleDeleteFile}
             onDeleteDirectory={handleDeleteDirectory}
             onMoveFiles={handleMoveFiles}
             onSelectFileDetail={handleSelectFileDetail}

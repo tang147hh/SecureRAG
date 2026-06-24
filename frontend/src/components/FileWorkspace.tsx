@@ -39,6 +39,7 @@ interface FileWorkspaceProps {
   ) => void;
   onReembedFile: (fileId: string, options?: UploadIndexingOptions) => void;
   onCreateDirectory: (name: string) => void;
+  onDeleteFile: (fileId: string) => void;
   onDeleteDirectory: (directoryId: string) => void;
   onMoveFiles: (fileIds: string[], directoryId?: string | null) => void;
   onSelectFileDetail: (fileId: string, typeFilter?: string) => void;
@@ -67,6 +68,7 @@ export function FileWorkspace({
   onUploadFiles,
   onReembedFile,
   onCreateDirectory,
+  onDeleteFile,
   onDeleteDirectory,
   onMoveFiles,
   onSelectFileDetail,
@@ -227,10 +229,33 @@ export function FileWorkspace({
 
   const handleReembed = () => {
     if (!activeFileDetail) return;
-    if (!window.confirm("重新 embedding 会先删除该文件原来的 chunks，再按当前切分参数重建。确认继续？")) {
+    const message = [
+      `确认要重新 embedding「${activeFileDetail.file.name}」吗？`,
+      "",
+      "系统会先删除该文件当前的 chunks 和向量索引，再按当前 chunk_size / chunk_overlap 重建。",
+      "如果重建失败，页面会显示错误信息；请根据提示检查后端索引日志或重新上传文件。",
+    ].join("\n");
+    if (!window.confirm(message)) {
       return;
     }
     onReembedFile(activeFileDetail.file.id, uploadOptions);
+  };
+
+  const handleDeleteFile = () => {
+    if (!activeFileDetail) return;
+    const message = [
+      `确认要删除「${activeFileDetail.file.name}」吗？`,
+      "",
+      "此操作会删除：",
+      "1. 文件记录和原始文件",
+      "2. 该文件的所有 chunks",
+      "3. 该文件的向量索引",
+      "4. 目录中的文件引用",
+      "",
+      "删除后无法在当前界面恢复，需要重新上传并 embedding。确认继续？",
+    ].join("\n");
+    if (!window.confirm(message)) return;
+    onDeleteFile(activeFileDetail.file.id);
   };
 
   return (
@@ -467,6 +492,14 @@ export function FileWorkspace({
                     </IconButton>
                     <IconButton label="编辑权限" onClick={handleEditPermissions}>
                       <Users size={16} />
+                    </IconButton>
+                    <IconButton
+                      label="删除文件"
+                      variant="danger"
+                      disabled={isUploading}
+                      onClick={handleDeleteFile}
+                    >
+                      <Trash2 size={16} />
                     </IconButton>
                   </>
                 ) : null}
