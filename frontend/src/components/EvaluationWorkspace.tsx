@@ -432,7 +432,12 @@ export function EvaluationWorkspace({ files }: EvaluationWorkspaceProps) {
               <div className="eval-answer">{activeRun.answer || activeRun.error || "无答案"}</div>
               <div className="eval-metric-grid">
                 <MetricCard label="source hit" value={percentMetric(activeRun, "expected_source_hit_rate")} />
+                <MetricCard label="Hit@K" value={boolMetric(activeRun, "hit_at_k")} />
+                <MetricCard label="MRR" value={decimalMetric(activeRun, "mrr")} />
+                <MetricCard label="NDCG@K" value={percentMetric(activeRun, "ndcg_at_k")} />
                 <MetricCard label="keyword hit" value={percentMetric(activeRun, "keyword_hit_rate")} />
+                <MetricCard label="拒答准确" value={nullableBoolMetric(activeRun, "refusal_accuracy")} />
+                <MetricCard label="引用支持率" value={percentMetric(activeRun, "citation_support_rate")} />
                 <MetricCard label="latency" value={`${numberMetric(activeRun, "latency_ms")} ms`} />
                 <MetricCard
                   label="ACL leak"
@@ -554,6 +559,24 @@ function percentMetric(run: RagEvalRun, key: string) {
   const value = run.metrics[key];
   if (typeof value !== "number") return "-";
   return `${Math.round(value * 100)}%`;
+}
+
+function decimalMetric(run: RagEvalRun, key: string) {
+  const value = run.metrics[key];
+  if (typeof value !== "number") return "-";
+  return value.toFixed(2);
+}
+
+function boolMetric(run: RagEvalRun, key: string) {
+  const value = run.metrics[key];
+  if (typeof value !== "boolean") return "-";
+  return value ? "true" : "false";
+}
+
+function nullableBoolMetric(run: RagEvalRun, key: string) {
+  const value = run.metrics[key];
+  if (value === null || value === undefined) return "-";
+  return value === true ? "true" : "false";
 }
 
 function messageOf(error: unknown, fallback: string) {

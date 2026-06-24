@@ -57,7 +57,9 @@ def test_create_dataset_and_example(monkeypatch):
 
     assert dataset.name == "回归集"
     assert example.evaluatorUserId == "bob"
-    assert service.list_eval_examples(dataset.id, "alice")[0].expectedSourceIds == ["doc-1"]
+    assert service.list_eval_examples(dataset.id, "alice")[0].expectedSourceIds == [
+        "doc-1"
+    ]
 
 
 def test_metric_hit_rates_are_calculated():
@@ -72,7 +74,11 @@ def test_metric_hit_rates_are_calculated():
                 ],
                 "citation_chunks": [{"source_id": "doc-1"}],
                 "durations_ms": {"total": 123},
-                "tokens": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                "tokens": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
+                },
             },
             expected_source_ids=["doc-1", "doc-2"],
             expected_keywords=["制度", "权限"],
@@ -85,10 +91,107 @@ def test_metric_hit_rates_are_calculated():
     assert metrics["latency_ms"] == 123
 
 
+def test_ranking_metrics_are_calculated_for_sorted_expected_source_hit():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="命中了正确制度。",
+            references=[],
+            trace_data={
+                "retrieval_params": {"topK": 3},
+                "context_chunks": [
+                    {"source_id": "doc-0"},
+                    {"source_id": "doc-2"},
+                    {"source_id": "doc-1"},
+                ],
+            },
+            expected_source_ids=["doc-1", "doc-2"],
+            expected_keywords=[],
+        )
+    )
+
+    assert metrics["hit_at_k"] is True
+    assert metrics["hit_k"] == 3
+    assert metrics["mrr"] == 0.5
+    assert round(metrics["ndcg_at_k"], 3) == 0.693
+
+
+def test_ranking_metrics_are_zero_when_expected_sources_miss():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="没有命中正确制度。",
+            references=[],
+            trace_data={
+                "context_chunks": [
+                    {"source_id": "doc-0"},
+                    {"source_id": "doc-2"},
+                ],
+            },
+            expected_source_ids=["doc-1"],
+            expected_keywords=[],
+        )
+    )
+
+    assert metrics["hit_at_k"] is False
+    assert metrics["mrr"] == 0
+    assert metrics["ndcg_at_k"] == 0
+
+
+def test_no_answer_refusal_accuracy_is_true_for_refusal_answer():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="根据当前信息不足，无法回答该问题。",
+            references=[],
+            trace_data={},
+            expected_source_ids=[],
+            expected_keywords=[],
+            tags=["no_answer"],
+        )
+    )
+
+    assert metrics["refusal_accuracy"] is True
+
+
+def test_no_answer_refusal_accuracy_is_false_for_forced_answer():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="公司明年计划上市。",
+            references=[],
+            trace_data={},
+            expected_source_ids=[],
+            expected_keywords=[],
+            tags=["no_answer"],
+        )
+    )
+
+    assert metrics["refusal_accuracy"] is False
+
+
+def test_citation_support_rate_counts_expected_source_citations():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="答案引用了部分正确来源。",
+            references=[],
+            trace_data={
+                "citation_chunks": [
+                    {"source_id": "doc-1"},
+                    {"source_id": "doc-9"},
+                    {"source_id": "doc-2"},
+                ],
+            },
+            expected_source_ids=["doc-1", "doc-2"],
+            expected_keywords=[],
+        )
+    )
+
+    assert metrics["citation_support_rate"] == 2 / 3
+
+
 def test_run_example_generates_result_and_trace(monkeypatch):
     _engine(monkeypatch)
     service = react_api.ReactApiService()
-    monkeypatch.setattr(service, "get_chat_settings", lambda user_id: react_api.ChatSettings())
+    monkeypatch.setattr(
+        service, "get_chat_settings", lambda user_id: react_api.ChatSettings()
+    )
     monkeypatch.setattr(service, "_file_index", lambda: None)
 
     def fake_run(payload, user_id, emit_token, **kwargs):
@@ -176,19 +279,27 @@ def test_evaluator_acl_detects_hidden_source_and_result_omits_hidden_text(monkey
             ]
         )
         session.commit()
-    permission_service.ensure_default_acl(index, Source(id="owned", name="owned.pdf", user="bob"))
-    permission_service.ensure_default_acl(index, Source(id="hidden", name="hidden.pdf", user="alice"))
+    permission_service.ensure_default_acl(
+        index, Source(id="owned", name="owned.pdf", user="bob")
+    )
+    permission_service.ensure_default_acl(
+        index, Source(id="hidden", name="hidden.pdf", user="alice")
+    )
 
     leak = react_api.eval_store.detect_acl_leak(
         index=index,
-        trace_data={"context_chunks": [{"source_id": "hidden", "text": "secret hidden text"}]},
+        trace_data={
+            "context_chunks": [{"source_id": "hidden", "text": "secret hidden text"}]
+        },
         evaluator_user_id="bob",
     )
     metrics = calculate_metrics(
         EvalMetricInputs(
             answer="allowed summary",
             references=[],
-            trace_data={"context_chunks": [{"source_id": "owned", "text": "allowed text"}]},
+            trace_data={
+                "context_chunks": [{"source_id": "owned", "text": "allowed text"}]
+            },
             expected_source_ids=["hidden"],
             expected_keywords=["allowed"],
         ),
@@ -197,4 +308,6 @@ def test_evaluator_acl_detects_hidden_source_and_result_omits_hidden_text(monkey
 
     assert leak is True
     assert metrics["acl_leak_detected"] is True
-    assert "secret hidden text" not in str({"answer": "allowed summary", "metrics": metrics})
+    assert "secret hidden text" not in str(
+        {"answer": "allowed summary", "metrics": metrics}
+    )

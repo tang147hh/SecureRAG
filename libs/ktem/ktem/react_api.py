@@ -1826,6 +1826,7 @@ class ReactApiService:
                     trace_data=result.traceData,
                     expected_source_ids=list(example.expected_source_ids or []),
                     expected_keywords=list(example.expected_keywords or []),
+                    tags=list(example.tags or []),
                 ),
                 acl_leak_detected=acl_leak,
             )
@@ -1843,6 +1844,7 @@ class ReactApiService:
                     expected_source_ids=list(example.expected_source_ids or []),
                     expected_keywords=list(example.expected_keywords or []),
                     error=error,
+                    tags=list(example.tags or []),
                 ),
                 acl_leak_detected=False,
             )

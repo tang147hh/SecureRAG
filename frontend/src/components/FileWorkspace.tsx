@@ -84,6 +84,7 @@ export function FileWorkspace({
   const [chunkOverlap, setChunkOverlap] = useState(256);
   const [dragOverDirectoryId, setDragOverDirectoryId] = useState<string>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const chunkSectionRef = useRef<HTMLElement | null>(null);
 
   const filesByDirectory = useMemo(() => {
     const grouped = new Map<string, FileItem[]>();
@@ -256,6 +257,10 @@ export function FileWorkspace({
     ].join("\n");
     if (!window.confirm(message)) return;
     onDeleteFile(activeFileDetail.file.id);
+  };
+
+  const handleShowChunks = () => {
+    chunkSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
 
   return (
@@ -474,15 +479,19 @@ export function FileWorkspace({
       <aside className="file-detail-panel">
         {activeFileDetail ? (
           <>
-            <div className="drawer-heading">
-              <div>
+            <div className="drawer-heading file-detail-heading">
+              <div className="file-detail-title">
                 <strong>{activeFileDetail.file.name}</strong>
                 <small>{activeFileDetail.chunkCount} chunks</small>
               </div>
-              <div className="file-detail-actions">
+              <div className="file-detail-meta">
                 <PermissionBadge permission={activeFileDetail.file.permission} />
-                {activeFileDetail.file.permission === "owner" ? (
-                  <>
+                <div className="file-detail-actions" aria-label="文件操作">
+                  <IconButton label="查看 Chunk 明细" onClick={handleShowChunks}>
+                    <PieChart size={16} />
+                  </IconButton>
+                  {activeFileDetail.file.permission === "owner" ? (
+                    <>
                     <IconButton
                       label="重新 embedding"
                       disabled={isUploading}
@@ -501,9 +510,9 @@ export function FileWorkspace({
                     >
                       <Trash2 size={16} />
                     </IconButton>
-                  </>
-                ) : null}
-                <PieChart size={18} />
+                    </>
+                  ) : null}
+                </div>
               </div>
             </div>
 
@@ -537,7 +546,10 @@ export function FileWorkspace({
               <p className="file-detail-summary">{activeFileDetail.file.summary}</p>
             </section>
 
-            <section className="file-detail-section file-detail-section--grow">
+            <section
+              className="file-detail-section file-detail-section--grow"
+              ref={chunkSectionRef}
+            >
               <div className="section-heading">
                 <div>
                   <span>Chunk 明细</span>

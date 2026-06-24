@@ -1615,9 +1615,34 @@ button {
   background: rgba(8, 145, 178, 0.14);
 }
 
+.file-detail-heading {
+  align-items: flex-start;
+}
+
+.file-detail-title {
+  padding-top: 0.08rem;
+}
+
+.file-detail-title strong {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-detail-meta {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 0.45rem;
+}
+
 .file-detail-actions {
-  gap: 0.42rem;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(2, 2.15rem);
+  gap: 0.38rem;
+  justify-content: end;
 }
 
 .file-empty {

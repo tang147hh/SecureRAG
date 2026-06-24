@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import log2
 from typing import Any
 
 from sqlmodel import Session, select
@@ -19,6 +20,7 @@ class EvalMetricInputs:
     expected_source_ids: list[str]
     expected_keywords: list[str]
     error: str | None = None
+    tags: list[str] | None = None
 
 
 def _normalize_list(values: list[Any] | None) -> list[str]:
@@ -32,14 +34,90 @@ def _normalize_list(values: list[Any] | None) -> list[str]:
     return output
 
 
+def _chunk_source_id(chunk: dict[str, Any] | None) -> str:
+    if not chunk or not isinstance(chunk, dict):
+        return ""
+    metadata = chunk.get("metadata") or {}
+    return str(
+        chunk.get("source_id")
+        or metadata.get("file_id")
+        or metadata.get("source_id")
+        or ""
+    ).strip()
+
+
 def _trace_source_ids(trace_data: dict[str, Any]) -> set[str]:
     ids: set[str] = set()
     for key in ("citation_chunks", "context_chunks", "candidate_chunks_after_rerank"):
         for chunk in trace_data.get(key) or []:
-            source_id = str((chunk or {}).get("source_id") or "").strip()
+            source_id = _chunk_source_id(chunk)
             if source_id:
                 ids.add(source_id)
     return ids
+
+
+def _ranked_chunks(trace_data: dict[str, Any]) -> list[dict[str, Any]]:
+    chunks = (
+        trace_data.get("context_chunks")
+        or trace_data.get("candidate_chunks_after_rerank")
+        or []
+    )
+    return [chunk for chunk in chunks if isinstance(chunk, dict)]
+
+
+def _metric_k(trace_data: dict[str, Any], ranked_chunks: list[dict[str, Any]]) -> int:
+    params = trace_data.get("retrieval_params") or {}
+    for key in ("topK", "top_k", "topk"):
+        try:
+            value = int(params.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+    return len(ranked_chunks)
+
+
+def _ranked_source_ids(trace_data: dict[str, Any]) -> tuple[list[str], int]:
+    chunks = _ranked_chunks(trace_data)
+    k = _metric_k(trace_data, chunks)
+    return [_chunk_source_id(chunk) for chunk in chunks[:k]], k
+
+
+def _first_hit_rank(
+    source_ids: list[str], expected_source_ids: list[str]
+) -> int | None:
+    expected = set(expected_source_ids)
+    for index, source_id in enumerate(source_ids, start=1):
+        if source_id in expected:
+            return index
+    return None
+
+
+def _ndcg_at_k(source_ids: list[str], expected_source_ids: list[str]) -> float:
+    if not expected_source_ids or not source_ids:
+        return 0.0
+    expected = set(expected_source_ids)
+    seen: set[str] = set()
+    dcg = 0.0
+    for rank, source_id in enumerate(source_ids, start=1):
+        if source_id in expected and source_id not in seen:
+            dcg += 1.0 / log2(rank + 1)
+            seen.add(source_id)
+    ideal_hits = min(len(expected), len(source_ids))
+    idcg = sum(1.0 / log2(rank + 1) for rank in range(1, ideal_hits + 1))
+    return dcg / idcg if idcg else 0.0
+
+
+def _is_refusal_answer(answer: str) -> bool:
+    refusal_markers = (
+        "无法回答",
+        "没有相关信息",
+        "根据当前信息不足",
+        "未找到",
+        "不知道",
+        "无法确定",
+    )
+    return any(marker in answer for marker in refusal_markers)
 
 
 def calculate_metrics(
@@ -51,15 +129,25 @@ def calculate_metrics(
     trace_data = inputs.trace_data or {}
     expected_source_ids = _normalize_list(inputs.expected_source_ids)
     expected_keywords = _normalize_list(inputs.expected_keywords)
+    tags = {tag.lower() for tag in _normalize_list(inputs.tags)}
     observed_source_ids = _trace_source_ids(trace_data)
     hit_source_ids = [
-        source_id for source_id in expected_source_ids if source_id in observed_source_ids
+        source_id
+        for source_id in expected_source_ids
+        if source_id in observed_source_ids
     ]
     answer_lower = answer.lower()
     hit_keywords = [
         keyword for keyword in expected_keywords if keyword.lower() in answer_lower
     ]
     citation_chunks = trace_data.get("citation_chunks") or []
+    ranked_source_ids, metric_k = _ranked_source_ids(trace_data)
+    first_hit_rank = _first_hit_rank(ranked_source_ids, expected_source_ids)
+    citation_hit_count = sum(
+        1
+        for chunk in citation_chunks
+        if _chunk_source_id(chunk) in set(expected_source_ids)
+    )
     durations = trace_data.get("durations_ms") or {}
     tokens = trace_data.get("tokens") or {}
     errors = trace_data.get("errors") or []
@@ -78,12 +166,26 @@ def calculate_metrics(
         "expected_source_hit_count": len(hit_source_ids),
         "expected_source_total": len(expected_source_ids),
         "matched_source_ids": hit_source_ids,
+        "hit_at_k": (first_hit_rank is not None if expected_source_ids else None),
+        "hit_k": metric_k,
+        "mrr": (1 / first_hit_rank if first_hit_rank else 0),
+        "ndcg_at_k": (
+            _ndcg_at_k(ranked_source_ids, expected_source_ids)
+            if expected_source_ids
+            else None
+        ),
         "keyword_hit_rate": (
             len(hit_keywords) / len(expected_keywords) if expected_keywords else None
         ),
         "keyword_hit_count": len(hit_keywords),
         "keyword_total": len(expected_keywords),
         "matched_keywords": hit_keywords,
+        "refusal_accuracy": (
+            _is_refusal_answer(answer) if "no_answer" in tags else None
+        ),
+        "citation_support_rate": (
+            citation_hit_count / len(citation_chunks) if citation_chunks else 0
+        ),
         "acl_leak_detected": bool(acl_leak_detected),
         "latency_ms": int(durations.get("total") or 0),
         "prompt_tokens": int(tokens.get("prompt_tokens") or 0),
@@ -204,9 +306,7 @@ class RagEvaluationStore:
             )
             return session.exec(statement).all()
 
-    def get_example(
-        self, example_id: str, owner_user_id: str
-    ) -> RagEvalExample | None:
+    def get_example(self, example_id: str, owner_user_id: str) -> RagEvalExample | None:
         with Session(engine) as session:
             row = session.exec(
                 select(RagEvalExample).where(RagEvalExample.id == example_id)
@@ -368,9 +468,7 @@ class RagEvaluationStore:
         error: str | None = None,
     ) -> RagEvalRun:
         with Session(engine) as session:
-            row = session.exec(
-                select(RagEvalRun).where(RagEvalRun.id == run_id)
-            ).one()
+            row = session.exec(select(RagEvalRun).where(RagEvalRun.id == run_id)).one()
             row.status = status
             row.answer = answer
             row.references = references
@@ -423,11 +521,15 @@ class RagEvaluationStore:
         source_ids = _trace_source_ids(trace_data)
         if not source_ids:
             return False
-        Source = index._resources.get("Source") if hasattr(index, "_resources") else None
+        Source = (
+            index._resources.get("Source") if hasattr(index, "_resources") else None
+        )
         if Source is None:
             return False
         with Session(engine) as session:
-            rows = session.execute(select(Source).where(Source.id.in_(source_ids))).all()
+            rows = session.execute(
+                select(Source).where(Source.id.in_(source_ids))
+            ).all()
         source_by_id = {str(source.id): source for (source,) in rows}
         for source_id in source_ids:
             source = source_by_id.get(source_id)
