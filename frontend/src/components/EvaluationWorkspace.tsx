@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ClipboardList,
   Eye,
   FilePlus2,
+  FileUp,
   Loader2,
   Play,
   Plus,
@@ -47,7 +48,9 @@ export function EvaluationWorkspace({ files }: EvaluationWorkspaceProps) {
   const [editingExampleId, setEditingExampleId] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [runningId, setRunningId] = useState<string>();
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string>();
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const activeDataset = useMemo(
     () => datasets.find((dataset) => dataset.id === activeDatasetId),
@@ -208,6 +211,30 @@ export function EvaluationWorkspace({ files }: EvaluationWorkspaceProps) {
     }
   };
 
+  const importExamples = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !activeDatasetId) return;
+    setImporting(true);
+    setError(undefined);
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      const payloads = rows.map(csvRowToExample).filter((item) => item.question.trim());
+      if (!payloads.length) {
+        throw new Error("CSV 中没有可导入的问题。");
+      }
+      for (const payload of payloads) {
+        await apiClient.createEvalExample(activeDatasetId, payload);
+      }
+      await refreshActive();
+    } catch (err) {
+      setError(messageOf(err, "导入 CSV 失败。"));
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const openRun = async (runId: string) => {
     try {
       const detail = await apiClient.getEvalRun(runId);
@@ -259,6 +286,22 @@ export function EvaluationWorkspace({ files }: EvaluationWorkspaceProps) {
             <strong>{activeDataset?.name ?? "选择或新建测试集"}</strong>
           </div>
           <div className="file-toolbar__actions">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              hidden
+              onChange={importExamples}
+            />
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!activeDatasetId || importing}
+              onClick={() => importInputRef.current?.click()}
+            >
+              {importing ? <Loader2 className="spin" size={15} /> : <FileUp size={15} />}
+              导入 CSV
+            </button>
             <button className="secondary-button" type="button" onClick={refreshActive}>
               <RefreshCw size={15} />
               刷新
@@ -548,6 +591,58 @@ function splitTokens(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell);
+      if (row.some((value) => value.trim())) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.some((value) => value.trim())) rows.push(row);
+  const [headers = [], ...records] = rows;
+  return records.map((record) => {
+    const item: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      item[header.trim()] = (record[index] ?? "").trim();
+    });
+    return item;
+  });
+}
+
+function csvRowToExample(row: Record<string, string>): RagEvalExamplePayload {
+  return {
+    question: row.question ?? "",
+    expectedAnswer: row.expected_answer ?? row.expectedAnswer ?? "",
+    expectedSourceIds: splitTokens(row.expected_source_ids ?? row.expectedSourceIds ?? ""),
+    expectedKeywords: splitTokens(row.expected_keywords ?? row.expectedKeywords ?? ""),
+    evaluatorUserId: row.evaluator_user_id ?? row.evaluatorUserId ?? "",
+    selectedFileIds: splitTokens(row.selected_file_ids ?? row.selectedFileIds ?? ""),
+    tags: splitTokens(row.tags ?? ""),
+  };
 }
 
 function numberMetric(run: RagEvalRun, key: string) {
