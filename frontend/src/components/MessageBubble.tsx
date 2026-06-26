@@ -1,4 +1,5 @@
 import { Check, Copy, FileSearch, FileText } from "lucide-react";
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { apiClient } from "../api/client";
 import type { ChatMessage, RagTraceDetail } from "../api/types";
@@ -40,6 +41,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           <span>{isAssistant ? "SecureRAG Assistant" : isSystem ? "System" : "You"}</span>
           <small>
             {new Intl.DateTimeFormat("zh-CN", {
+              timeZone: "Asia/Shanghai",
               hour: "2-digit",
               minute: "2-digit",
             }).format(new Date(message.createdAt))}
@@ -48,7 +50,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         </div>
         <div className="message-bubble">
           {message.content ? (
-            <p>{message.content}</p>
+            <MarkdownText text={message.content} />
           ) : (
             <div className="typing-indicator">
               <span />
@@ -111,4 +113,41 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       </div>
     </article>
   );
+}
+
+function MarkdownText({ text }: { text: string }) {
+  const paragraphs = text.split(/\n{2,}/);
+  return (
+    <div className="message-markdown">
+      {paragraphs.map((paragraph, paragraphIndex) => (
+        <p key={`${paragraph}-${paragraphIndex}`}>
+          {renderInlineMarkdown(paragraph)}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function renderInlineMarkdown(text: string) {
+  const parts: ReactNode[] = [];
+  const pattern = /(\*\*([^*\n]+)\*\*)|(\n)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    if (match[3]) {
+      parts.push(<br key={`br-${match.index}`} />);
+    } else {
+      parts.push(<strong key={`strong-${match.index}`}>{match[2]}</strong>);
+    }
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts;
 }

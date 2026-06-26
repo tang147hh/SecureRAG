@@ -3,14 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
-from tzlocal import get_localzone
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _now() -> datetime:
-    return datetime.now(get_localzone())
+    return datetime.now(CHINA_TZ)
 
 
 class RagEvalDataset(SQLModel, table=True):

@@ -12,6 +12,7 @@ import type {
   RagEvalExample,
   RagEvalExamplePayload,
   RagEvalRun,
+  RagEvalRunPayload,
   RagEvalRunDetail,
   ReferenceDocument,
   SendMessagePayload,
@@ -249,11 +250,23 @@ export const apiClient = {
   deleteEvalExample: (exampleId: string) =>
     request<void>(`/eval/examples/${exampleId}`, { method: "DELETE" }),
 
-  runEvalExample: (exampleId: string) =>
-    request<RagEvalRunDetail>(`/eval/examples/${exampleId}/run`, { method: "POST" }),
+  runEvalExample: (exampleId: string, payload: RagEvalRunPayload = {}) =>
+    request<RagEvalRunDetail>(`/eval/examples/${exampleId}/run`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
-  runEvalDataset: (datasetId: string) =>
-    request<RagEvalRun[]>(`/eval/datasets/${datasetId}/run`, { method: "POST" }),
+  compareEvalExample: (exampleId: string, payload: RagEvalRunPayload = {}) =>
+    request<RagEvalRun[]>(`/eval/examples/${exampleId}/compare`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  runEvalDataset: (datasetId: string, payload: RagEvalRunPayload = {}) =>
+    request<RagEvalRun[]>(`/eval/datasets/${datasetId}/run`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   listEvalRuns: (datasetId?: string, exampleId?: string, limit = 50) => {
     const params = new URLSearchParams();

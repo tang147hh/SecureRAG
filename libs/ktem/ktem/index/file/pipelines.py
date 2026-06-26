@@ -8,6 +8,7 @@ import time
 import warnings
 from collections import defaultdict
 from copy import deepcopy
+from datetime import datetime
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
@@ -32,6 +33,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from theflow.settings import settings
 from theflow.utils.modules import import_dotted_string
+from tzlocal import get_localzone
 
 from kotaemon.base import BaseComponent, Document, Node, Param, RetrievedDocument
 from kotaemon.embeddings import BaseEmbeddings
@@ -52,6 +54,56 @@ from kotaemon.indices.splitters import BaseSplitter, TokenSplitter
 from .base import BaseFileIndexIndexing, BaseFileIndexRetriever
 
 logger = logging.getLogger(__name__)
+SUMMARY_CHUNK_TYPE = "summary"
+SUMMARY_LAYER_DOCUMENT = "document_summary"
+SUMMARY_LAYER_SECTION = "section_summary"
+DETAIL_LAYER = "detail_layer"
+GLOBAL_QUERY_TERMS = (
+    "整体",
+    "总体",
+    "概览",
+    "概要",
+    "总结",
+    "汇总",
+    "摘要",
+    "主要",
+    "核心",
+    "主题",
+    "涵盖",
+    "包括",
+    "有哪些",
+    "哪些方面",
+    "框架",
+    "结构",
+    "全局",
+    "全篇",
+    "整份",
+    "整篇",
+    "这份文档",
+    "本文档",
+    "手册",
+    "overview",
+    "summary",
+)
+DETAIL_QUERY_TERMS = (
+    "多少",
+    "多久",
+    "哪一天",
+    "日期",
+    "编号",
+    "BX-",
+    "HT-",
+    "是否",
+    "能否",
+    "谁",
+    "状态",
+    "审批",
+    "上限",
+    "标准",
+    "有效期",
+    "原因",
+    "为什么",
+)
 
 
 @lru_cache
@@ -79,6 +131,51 @@ def dev_settings():
 _default_token_func = tiktoken.encoding_for_model("gpt-3.5-turbo").encode
 
 
+def _is_summary_chunk(doc: Document | RetrievedDocument) -> bool:
+    metadata = getattr(doc, "metadata", {}) or {}
+    return metadata.get("type") == SUMMARY_CHUNK_TYPE
+
+
+def _is_global_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return False
+    if any(term in normalized for term in DETAIL_QUERY_TERMS):
+        return False
+    return any(term in normalized.lower() for term in GLOBAL_QUERY_TERMS)
+
+
+def _sentence_candidates(text: str) -> list[str]:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return []
+    sentences: list[str] = []
+    current = []
+    for char in normalized:
+        current.append(char)
+        if char in "。！？!?；;":
+            sentence = "".join(current).strip()
+            if sentence:
+                sentences.append(sentence)
+            current = []
+    tail = "".join(current).strip()
+    if tail:
+        sentences.append(tail)
+    if len(sentences) <= 1:
+        sentences = [part.strip() for part in normalized.split("\n") if part.strip()]
+    return sentences
+
+
+def _compact_summary(text: str, max_sentences: int = 3, max_chars: int = 420) -> str:
+    sentences = _sentence_candidates(text)
+    selected = sentences[:max_sentences] if sentences else [str(text or "").strip()]
+    summary = " ".join(sentence for sentence in selected if sentence).strip()
+    if len(summary) > max_chars:
+        summary = summary[:max_chars].rsplit(" ", 1)[0].strip() or summary[:max_chars]
+        summary = f"{summary}..."
+    return summary
+
+
 class DocumentRetrievalPipeline(BaseFileIndexRetriever):
     """Retrieve relevant document
 
@@ -103,6 +200,17 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
     first_round_top_k_mult: int = 10
     retrieval_mode: str = "hybrid"
     doc_ids: Optional[list[str]] = None
+
+    def _select_retrieval_layer(
+        self,
+        query: str,
+        *,
+        summary_chunk_ids: list[str],
+        detail_chunk_ids: list[str],
+    ) -> tuple[str, list[str]]:
+        if summary_chunk_ids and _is_global_question(query):
+            return "summary_layer", summary_chunk_ids
+        return "detail_layer", detail_chunk_ids
 
     @Node.auto(depends_on=["embedding", "VS", "DS"])
     def vector_retrieval(self) -> VectorRetrieval:
@@ -130,6 +238,7 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
         """
         if doc_ids is None:
             doc_ids = self.doc_ids
+        query_variants = kwargs.pop("query_variants", None)
 
         # flatten doc_ids in case of group of doc_ids are passed
         if doc_ids:
@@ -192,6 +301,28 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
             results = session.execute(stmt)
             chunk_ids = [r[0].target_id for r in results.all()]
 
+        try:
+            docs_by_id = {doc.doc_id: doc for doc in self.DS.get(chunk_ids)}
+        except Exception:
+            docs_by_id = {}
+        summary_chunk_ids = [
+            chunk_id
+            for chunk_id, doc in docs_by_id.items()
+            if _is_summary_chunk(doc)
+        ]
+        detail_chunk_ids = [
+            chunk_id
+            for chunk_id, doc in docs_by_id.items()
+            if not _is_summary_chunk(doc)
+        ] or chunk_ids
+        retrieval_layer, scoped_chunk_ids = self._select_retrieval_layer(
+            text,
+            summary_chunk_ids=summary_chunk_ids,
+            detail_chunk_ids=detail_chunk_ids,
+        )
+        if not scoped_chunk_ids:
+            scoped_chunk_ids = chunk_ids
+
         if trace_recorder:
             trace_recorder.record_acl_filter(
                 index=self,
@@ -204,7 +335,9 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
 
         # do first round top_k extension
         retrieval_kwargs["do_extend"] = True
-        retrieval_kwargs["scope"] = chunk_ids
+        retrieval_kwargs["scope"] = scoped_chunk_ids
+        retrieval_kwargs["retrieval_layer"] = retrieval_layer
+        retrieval_kwargs["query_variants"] = query_variants
         retrieval_kwargs["filters"] = MetadataFilters(
             filters=[
                 MetadataFilter(
@@ -307,7 +440,7 @@ class DocumentRetrievalPipeline(BaseFileIndexRetriever):
         )
         reranking_llm = user_settings.get("reranking_llm", llms.get_default_name())
 
-        use_reranking = user_settings.get("use_reranking", False)
+        use_reranking = user_settings.get("use_reranking", True)
         rerankers = []
         if use_reranking and reranking_models_manager.options():
             rerankers = [
@@ -372,6 +505,139 @@ class IndexPipeline(BaseComponent):
             vector_store=self.VS, doc_store=self.DS, embedding=self.embedding
         )
 
+    @staticmethod
+    def _metadata_for_summary(base_docs: list[Document], file_id, file_name) -> dict:
+        metadata = dict(base_docs[0].metadata or {}) if base_docs else {}
+        metadata.update(
+            {
+                "file_id": file_id,
+                "file_name": file_name,
+                "type": SUMMARY_CHUNK_TYPE,
+                "retrieval_layer": "summary_layer",
+            }
+        )
+        metadata.pop("page_label", None)
+        metadata.pop("thumbnail_doc_id", None)
+        return metadata
+
+    @staticmethod
+    def _extract_heading(line: str) -> tuple[int, str] | None:
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            return None
+        level = len(stripped) - len(stripped.lstrip("#"))
+        title = stripped[level:].strip()
+        if not title:
+            return None
+        return level, title
+
+    def _extract_sections(self, text_docs: list[Document]) -> list[tuple[str, str]]:
+        sections: list[tuple[str, str]] = []
+        current_title = ""
+        current_lines: list[str] = []
+
+        def flush() -> None:
+            nonlocal current_title, current_lines
+            text = "\n".join(current_lines).strip()
+            if current_title and text:
+                sections.append((current_title, text))
+            current_lines = []
+
+        for doc in text_docs:
+            for line in (doc.text or "").splitlines():
+                heading = self._extract_heading(line)
+                if heading and heading[0] <= 2:
+                    flush()
+                    current_title = heading[1]
+                    continue
+                if line.strip():
+                    current_lines.append(line.strip())
+        flush()
+        return sections
+
+    def _group_chunks_as_sections(
+        self, chunks: list[Document]
+    ) -> list[tuple[str, str]]:
+        grouped: dict[str, list[str]] = defaultdict(list)
+        for chunk in chunks:
+            if not chunk.text:
+                continue
+            section = (
+                chunk.metadata.get("section")
+                or chunk.metadata.get("title")
+                or chunk.metadata.get("file_name")
+                or "正文"
+            )
+            grouped[str(section)].append(chunk.text)
+        return [
+            (section, "\n".join(parts))
+            for section, parts in grouped.items()
+            if any(part.strip() for part in parts)
+        ]
+
+    def build_summary_chunks(
+        self,
+        *,
+        text_docs: list[Document],
+        detail_chunks: list[Document],
+        file_id: str,
+        file_name: str,
+    ) -> list[Document]:
+        sections = self._extract_sections(text_docs)
+        if len(sections) <= 1:
+            sections = self._group_chunks_as_sections(detail_chunks)
+        if not sections:
+            return []
+
+        base_metadata = self._metadata_for_summary(text_docs or detail_chunks, file_id, file_name)
+        summary_chunks: list[Document] = []
+        section_summaries: list[tuple[str, str]] = []
+        for index, (title, text) in enumerate(sections, start=1):
+            summary = _compact_summary(text)
+            if not summary:
+                continue
+            section_summaries.append((title, summary))
+            digest = sha256(f"{file_id}:section:{index}:{title}:{summary}".encode()).hexdigest()
+            metadata = {
+                **base_metadata,
+                "section": title,
+                "summary_layer": SUMMARY_LAYER_SECTION,
+                "summary_scope": "section",
+                "summary_rank": index,
+            }
+            summary_chunks.append(
+                Document(
+                    text=f"章节摘要：{title}\n\n{summary}",
+                    id_=f"{file_id}-summary-section-{digest[:16]}",
+                    metadata=metadata,
+                )
+            )
+
+        if section_summaries:
+            digest = sha256(
+                f"{file_id}:document:{file_name}:{section_summaries}".encode()
+            ).hexdigest()
+            outline = "\n".join(
+                f"{idx}. {title}: {summary}"
+                for idx, (title, summary) in enumerate(section_summaries, start=1)
+            )
+            metadata = {
+                **base_metadata,
+                "section": "DOCUMENT",
+                "summary_layer": SUMMARY_LAYER_DOCUMENT,
+                "summary_scope": "document",
+                "summary_rank": 0,
+            }
+            summary_chunks.insert(
+                0,
+                Document(
+                    text=f"文档摘要：{file_name}\n\n{outline}",
+                    id_=f"{file_id}-summary-document-{digest[:16]}",
+                    metadata=metadata,
+                ),
+            )
+        return summary_chunks
+
     def handle_docs(self, docs, file_id, file_name) -> Generator[Document, None, int]:
         s_time = time.time()
         text_docs = []
@@ -402,8 +668,19 @@ class IndexPipeline(BaseComponent):
             page_label = chunk.metadata.get("page_label", None)
             if page_label and page_label in page_label_to_thumbnail:
                 chunk.metadata["thumbnail_doc_id"] = page_label_to_thumbnail[page_label]
+            chunk.metadata["retrieval_layer"] = DETAIL_LAYER
 
-        to_index_chunks = all_chunks + non_text_docs + thumbnail_docs
+        summary_chunks = self.build_summary_chunks(
+            text_docs=text_docs,
+            detail_chunks=all_chunks,
+            file_id=file_id,
+            file_name=file_name,
+        )
+        to_index_chunks = summary_chunks + all_chunks + non_text_docs + thumbnail_docs
+        yield Document(
+            f" => [{file_name}] Created {len(summary_chunks)} summary chunks",
+            channel="debug",
+        )
 
         # add to doc store
         chunks = []

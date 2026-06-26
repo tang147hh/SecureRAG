@@ -23,6 +23,8 @@ LQ009,付款审批模块谁可以访问？,财务主管和财务经理,long_poli
 LQ010,哪些文档不得设为公共文档？,包含薪酬、绩效、劳动合同、客户商业秘密的文档,long_policy_mixed.md,"包含薪酬、绩效、劳动合同、客户商业秘密的文档, 文档权限",permission,false,long_policy_questions.csv,long_policy_mixed.md 第七章 文档权限
 LQ011,生产环境访问申请必须说明哪些内容？,访问目的、预计操作时间和回滚方案,long_policy_mixed.md,"访问目的、预计操作时间和回滚方案, 生产环境访问",permission,false,long_policy_questions.csv,long_policy_mixed.md 第八章 生产环境访问
 LQ012,公司明年是否计划上市？,资料中没有提供相关信息,,,no_answer,true,long_policy_questions.csv,
+LQ013,这份综合制度长文档整体涵盖哪些管理主题？,涵盖人员身份、假期、病事假、差旅报销、特殊报销编号、财务系统权限、文档权限、生产环境访问、离职账号关闭和附则,long_policy_mixed.md,"涵盖人员身份、假期、病事假、差旅报销、特殊报销编号、财务系统权限、文档权限、生产环境访问、离职账号关闭和附则, 全文摘要",global_summary,false,long_policy_questions.csv,long_policy_mixed.md 全文摘要
+LQ014,这份制度手册的核心风险控制点有哪些？,核心风险控制点包括审批、提交期限、发票材料、系统访问权限、文档共享边界、生产环境操作记录和离职账号关闭,long_policy_mixed.md,"核心风险控制点包括审批、提交期限、发票材料、系统访问权限、文档共享边界、生产环境操作记录和离职账号关闭, 全文摘要",global_summary,false,long_policy_questions.csv,long_policy_mixed.md 全文摘要
 TP001,2026 年发生的报销事项，提交期限是 30 天还是 45 天？,应按 2026 年适用制度判断提交期限。,long_policy_mixed.md,"应按 2026 年适用制度判断提交期限。, 新旧制度适用范围",temporal_policy,false,lesson_03_retrieval_mode_experiment.md,long_policy_mixed.md 新旧制度适用范围
 TP002,2026 年一线城市住宿标准是多少？,应按 2026 年适用制度判断一线城市住宿标准。,long_policy_mixed.md,"应按 2026 年适用制度判断一线城市住宿标准。, 新旧制度适用范围",temporal_policy,false,lesson_03_retrieval_mode_experiment.md,long_policy_mixed.md 新旧制度适用范围
 TP003,2026 年生产环境临时权限最长是 7 天还是 14 天？,应按 2026 年适用制度判断生产环境临时权限有效期。,long_policy_mixed.md,"应按 2026 年适用制度判断生产环境临时权限有效期。, 新旧制度适用范围",temporal_policy,false,lesson_03_retrieval_mode_experiment.md,long_policy_mixed.md 新旧制度适用范围

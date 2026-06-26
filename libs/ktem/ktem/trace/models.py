@@ -3,10 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import JSON, Column, UniqueConstraint
 from sqlmodel import Field, SQLModel
-from tzlocal import get_localzone
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _now() -> datetime:
+    return datetime.now(CHINA_TZ)
 
 
 class RagTraceRun(SQLModel, table=True):
@@ -25,9 +31,5 @@ class RagTraceRun(SQLModel, table=True):
     status: str = Field(default="running", index=True)
     data: dict = Field(default_factory=dict, sa_column=Column(JSON))
     error: Optional[str] = Field(default=None)
-    date_created: datetime = Field(
-        default_factory=lambda: datetime.now(get_localzone()), index=True
-    )
-    date_updated: datetime = Field(
-        default_factory=lambda: datetime.now(get_localzone())
-    )
+    date_created: datetime = Field(default_factory=_now, index=True)
+    date_updated: datetime = Field(default_factory=_now)

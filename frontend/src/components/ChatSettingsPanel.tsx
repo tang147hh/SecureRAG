@@ -24,6 +24,12 @@ export function ChatSettingsPanel({
   const options = settings.options ?? {};
   const optionOr = (key: string, defaultOptions: { label: string; value: string }[]) =>
     options[key]?.length ? options[key] : defaultOptions;
+  const retrievalEnhancement = settings.retrieval.enhancement ?? "none";
+  const retrievalEnhancementOptions = optionOr("retrievalEnhancement", [
+    { label: "None", value: "none" },
+    { label: "Query Rewrite", value: "rewrite" },
+    { label: "HyDE", value: "hyde" },
+  ]).filter((option) => option.value !== "fusion");
   const promptTemplates = settings.promptTemplates ?? {
     [settings.promptTemplate]: settings.promptTemplateText,
   };
@@ -247,6 +253,20 @@ export function ChatSettingsPanel({
             { label: "Vector", value: "vector" },
             { label: "Full Text", value: "text" },
           ])}
+        />
+        <SelectField
+          label="检索增强"
+          value={retrievalEnhancement === "fusion" ? "none" : retrievalEnhancement}
+          onChange={(enhancement) => patchRetrieval({ enhancement })}
+          options={retrievalEnhancementOptions}
+        />
+        <SwitchField
+          label="RAG-Fusion"
+          description="生成多个查询视角并用 RRF 融合候选"
+          checked={retrievalEnhancement === "fusion"}
+          onChange={(enabled) =>
+            patchRetrieval({ enhancement: enabled ? "fusion" : "none" })
+          }
         />
         <SwitchField
           label="Rerank"

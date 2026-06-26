@@ -461,8 +461,18 @@ class ChatPage(BasePage):
                                 value="hybrid",
                                 label="召回方式",
                             )
+                            self.retrieval_enhancement = gr.Radio(
+                                choices=[
+                                    ("None", "none"),
+                                    ("Query Rewrite", "rewrite"),
+                                    ("HyDE", "hyde"),
+                                    ("RAG-Fusion", "fusion"),
+                                ],
+                                value="none",
+                                label="检索增强",
+                            )
                             self.use_reranking = gr.Checkbox(
-                                value=False,
+                                value=True,
                                 label="启用 rerank",
                                 container=True,
                             )
@@ -688,7 +698,8 @@ class ChatPage(BasePage):
             gr.update(value=settings.get("retrieval_top_k", 10)),
             gr.update(value=settings.get("first_round_multiplier", 10)),
             gr.update(value=settings.get("retrieval_mode", "hybrid")),
-            gr.update(value=settings.get("use_reranking", False)),
+            gr.update(value=settings.get("retrieval_enhancement", "none")),
+            gr.update(value=settings.get("use_reranking", True)),
             gr.update(value=settings.get("use_llm_reranking", False)),
             gr.update(value=settings.get("use_mmr", False)),
             gr.update(value=settings.get("prioritize_table", False)),
@@ -709,6 +720,7 @@ class ChatPage(BasePage):
         retrieval_top_k,
         first_round_multiplier,
         retrieval_mode,
+        retrieval_enhancement,
         use_reranking,
         use_llm_reranking,
         use_mmr,
@@ -726,6 +738,7 @@ class ChatPage(BasePage):
             "retrieval_top_k": retrieval_top_k,
             "first_round_multiplier": first_round_multiplier,
             "retrieval_mode": retrieval_mode,
+            "retrieval_enhancement": retrieval_enhancement or "none",
             "use_reranking": bool(use_reranking),
             "use_llm_reranking": bool(use_llm_reranking),
             "use_mmr": bool(use_mmr),
@@ -897,6 +910,7 @@ class ChatPage(BasePage):
                     self.retrieval_top_k,
                     self.first_round_multiplier,
                     self.retrieval_mode,
+                    self.retrieval_enhancement,
                     self.use_reranking,
                     self.use_llm_reranking,
                     self.use_mmr,
@@ -959,6 +973,7 @@ class ChatPage(BasePage):
             self.retrieval_top_k,
             self.first_round_multiplier,
             self.retrieval_mode,
+            self.retrieval_enhancement,
             self.use_reranking,
             self.use_llm_reranking,
             self.use_mmr,
@@ -1023,6 +1038,7 @@ class ChatPage(BasePage):
             self.retrieval_top_k,
             self.first_round_multiplier,
             self.retrieval_mode,
+            self.retrieval_enhancement,
             self.use_reranking,
             self.use_llm_reranking,
             self.use_mmr,
@@ -1686,6 +1702,7 @@ class ChatPage(BasePage):
                                 self.retrieval_top_k,
                                 self.first_round_multiplier,
                                 self.retrieval_mode,
+                                self.retrieval_enhancement,
                                 self.use_reranking,
                                 self.use_llm_reranking,
                                 self.use_mmr,
@@ -1734,6 +1751,7 @@ class ChatPage(BasePage):
                     self.retrieval_top_k,
                     self.first_round_multiplier,
                     self.retrieval_mode,
+                    self.retrieval_enhancement,
                     self.use_reranking,
                     self.use_llm_reranking,
                     self.use_mmr,
@@ -1846,6 +1864,7 @@ class ChatPage(BasePage):
         session_top_k: int | float,
         session_first_round_multiplier: int | float,
         session_retrieval_mode: str,
+        session_retrieval_enhancement: str,
         session_use_reranking: bool,
         session_use_llm_reranking: bool,
         session_use_mmr: bool,
@@ -1914,6 +1933,12 @@ class ChatPage(BasePage):
                 settings[f"reasoning.options.{reasoning_id}.qa_prompt"] = (
                     session_prompt_template
                 )
+
+        settings["reasoning.retrieval_enhancement"] = (
+            session_retrieval_enhancement
+            if session_retrieval_enhancement in {"none", "rewrite", "hyde", "fusion"}
+            else "none"
+        )
 
         try:
             session_top_k = int(session_top_k)
@@ -1996,6 +2021,7 @@ class ChatPage(BasePage):
         retrieval_top_k,
         first_round_multiplier,
         retrieval_mode,
+        retrieval_enhancement,
         use_reranking,
         use_llm_reranking,
         use_mmr,
@@ -2033,6 +2059,7 @@ class ChatPage(BasePage):
             retrieval_top_k,
             first_round_multiplier,
             retrieval_mode,
+            retrieval_enhancement,
             use_reranking,
             use_llm_reranking,
             use_mmr,

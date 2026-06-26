@@ -1,4 +1,5 @@
 import logging
+import json
 import threading
 from textwrap import dedent
 from typing import Generator
@@ -6,9 +7,16 @@ from types import SimpleNamespace
 
 from decouple import config
 from ktem.embeddings.manager import embedding_models_manager as embeddings
+from ktem.evidence import (
+    assess_answer_support,
+    build_refusal_answer,
+    decide_evidence_gate,
+)
 from ktem.llms.manager import llms
 from ktem.reasoning.prompt_optimization import (
     DecomposeQuestionPipeline,
+    HyDEQuestionPipeline,
+    RagFusionQueryPipeline,
     RewriteQuestionPipeline,
 )
 from ktem.utils.render import Render
@@ -38,6 +46,25 @@ from ..utils import SUPPORTED_LANGUAGE_MAP
 from .base import BaseReasoning
 
 logger = logging.getLogger(__name__)
+
+RAG_QA_GUARDRAIL_PROMPT = dedent(
+    """
+    RAG answer guardrails:
+    - Treat dates carefully. Distinguish event date, hire date, submission date,
+      approval date, reimbursement date, and policy effective date.
+    - When old/new policy boundaries or effective dates appear in the evidence,
+      choose the rule by the relevant event date. If the relevant event date is
+      missing, say the answer cannot be uniquely determined and give the possible
+      alternatives instead of choosing one standard.
+    - Treat employee identity, role, department, city, probation status, and
+      eligibility as applicability constraints. Do not apply regular-employee or
+      general rules to probationary or special identities unless the evidence
+      supports that applicability.
+    - For multi-condition questions, answer each requested fee, amount, approval
+      step, material requirement, exception, and non-duplication condition
+      separately. Mention missing standards explicitly instead of inventing them.
+    """
+).strip()
 
 
 class AddQueryContextPipeline(BaseComponent):
@@ -93,12 +120,15 @@ class FullQAPipeline(BaseReasoning):
     # configuration parameters
     trigger_context: int = 150
     use_rewrite: bool = False
+    retrieval_enhancement: str = "none"
 
     retrievers: list[BaseComponent]
 
     evidence_pipeline: PrepareEvidencePipeline = PrepareEvidencePipeline.withx()
     answering_pipeline: AnswerWithContextPipeline
     rewrite_pipeline: RewriteQuestionPipeline | None = None
+    hyde_pipeline: HyDEQuestionPipeline | None = None
+    rag_fusion_pipeline: RagFusionQueryPipeline | None = None
     create_citation_viz_pipeline: CreateCitationVizPipeline = Node(
         default_callback=lambda _: CreateCitationVizPipeline(
             embedding=embeddings.get_default()
@@ -106,8 +136,153 @@ class FullQAPipeline(BaseReasoning):
     )
     add_query_context: AddQueryContextPipeline = AddQueryContextPipeline.withx()
 
+    @staticmethod
+    def _normalize_retrieval_enhancement(strategy: str | None) -> str:
+        if strategy in {"none", "rewrite", "hyde", "fusion"}:
+            return str(strategy)
+        return "none"
+
+    @staticmethod
+    def _dedupe_queries(queries: list[str]) -> list[str]:
+        output = []
+        for query in queries:
+            normalized = " ".join(str(query).split())
+            if normalized and normalized not in output:
+                output.append(normalized)
+        return output
+
+    @staticmethod
+    def _materialize_pipeline(pipeline):
+        if hasattr(pipeline, "_cls") and hasattr(pipeline, "_params"):
+            return pipeline()
+        return pipeline
+
+    @staticmethod
+    def _append_system_guardrail(system_prompt: str | None) -> str:
+        prompt = (system_prompt or "").strip()
+        if RAG_QA_GUARDRAIL_PROMPT in prompt:
+            return prompt
+        if prompt:
+            return f"{prompt}\n\n{RAG_QA_GUARDRAIL_PROMPT}"
+        return RAG_QA_GUARDRAIL_PROMPT
+
+    def _build_retrieval_plan(
+        self,
+        question: str,
+        trace_recorder=None,
+    ) -> tuple[str, list[str]]:
+        strategy = self._normalize_retrieval_enhancement(
+            self.retrieval_enhancement
+        )
+        retrieval_query = question
+        query_variants = [question]
+        rewritten_question = None
+        hyde_document = None
+        fusion_queries = None
+        fusion_raw_response = None
+
+        try:
+            if strategy == "rewrite" and self.rewrite_pipeline:
+                print("Chosen rewrite pipeline", self.rewrite_pipeline)
+                rewrite_node = self._prepare_child(
+                    self._materialize_pipeline(self.rewrite_pipeline),
+                    "query_rewrite_pipeline",
+                )
+                if trace_recorder:
+                    with trace_recorder.timer("query_rewrite"):
+                        rewritten_question = rewrite_node(question=question).text
+                else:
+                    rewritten_question = rewrite_node(question=question).text
+                retrieval_query = (rewritten_question or question).strip() or question
+                print("Rewrite result", retrieval_query)
+            elif strategy == "hyde" and self.hyde_pipeline:
+                print("Chosen HyDE pipeline", self.hyde_pipeline)
+                hyde_node = self._prepare_child(
+                    self._materialize_pipeline(self.hyde_pipeline),
+                    "hyde_pipeline",
+                )
+                if trace_recorder:
+                    with trace_recorder.timer("hyde"):
+                        hyde_document = hyde_node(question=question).text
+                else:
+                    hyde_document = hyde_node(question=question).text
+                retrieval_query = (hyde_document or question).strip() or question
+                print("HyDE document", retrieval_query)
+            elif strategy == "fusion" and self.rag_fusion_pipeline:
+                print("Chosen RAG-Fusion pipeline", self.rag_fusion_pipeline)
+                rag_fusion_node = self._prepare_child(
+                    self._materialize_pipeline(self.rag_fusion_pipeline),
+                    "rag_fusion_pipeline",
+                )
+                if trace_recorder:
+                    with trace_recorder.timer("rag_fusion_query_generation"):
+                        fusion_doc = rag_fusion_node(question=question)
+                else:
+                    fusion_doc = rag_fusion_node(question=question)
+                fusion_metadata = getattr(fusion_doc, "metadata", {}) or {}
+                fusion_queries = self._dedupe_queries(
+                    list(fusion_metadata.get("queries") or [])
+                )
+                fusion_raw_response = fusion_metadata.get("raw_response")
+                if not fusion_queries:
+                    fusion_raw_response = getattr(fusion_doc, "text", "")
+                    try:
+                        parsed_queries = json.loads(fusion_raw_response)
+                    except (TypeError, json.JSONDecodeError):
+                        parsed_queries = []
+                    if isinstance(parsed_queries, list):
+                        fusion_queries = self._dedupe_queries(
+                            [question, *[str(item) for item in parsed_queries]]
+                        )
+                if fusion_queries:
+                    fusion_queries = RagFusionQueryPipeline._ensure_angle_coverage(
+                        question=question,
+                        queries=fusion_queries[1:],
+                        max_queries=5,
+                    )
+                query_variants = fusion_queries or [question]
+                retrieval_query = query_variants[0]
+                print("RAG-Fusion queries", query_variants)
+            elif strategy in {"rewrite", "hyde", "fusion"}:
+                strategy = "none"
+        except Exception as exc:
+            if trace_recorder:
+                trace_recorder.record_error(f"{strategy}_generation", exc)
+            logger.exception("Retrieval enhancement %s failed; using original query", strategy)
+            strategy = "none"
+            retrieval_query = question
+            query_variants = [question]
+            rewritten_question = None
+            hyde_document = None
+            fusion_queries = None
+            fusion_raw_response = None
+
+        if trace_recorder:
+            trace_recorder.record_retrieval_enhancement(
+                strategy=strategy,
+                original_question=question,
+                retrieval_query=retrieval_query,
+                rewritten_question=rewritten_question,
+                hyde_document=hyde_document,
+                fusion_queries=fusion_queries,
+                fusion_raw_response=fusion_raw_response,
+            )
+        return retrieval_query, query_variants
+
+    def _build_retrieval_query(
+        self,
+        question: str,
+        trace_recorder=None,
+    ) -> str:
+        retrieval_query, _ = self._build_retrieval_plan(question, trace_recorder)
+        return retrieval_query
+
     def retrieve(
-        self, message: str, history: list
+        self,
+        message: str,
+        history: list,
+        retrieval_query: str | None = None,
+        query_variants: list[str] | None = None,
     ) -> tuple[list[RetrievedDocument], list[Document]]:
         """Retrieve the documents based on the message"""
         # if len(message) < self.trigger_context:
@@ -119,7 +294,7 @@ class FullQAPipeline(BaseReasoning):
         # else:
         #     query = message
         # print(f"Rewritten query: {query}")
-        query = None
+        query = retrieval_query
         trace_recorder = None
         try:
             from ktem.trace import get_active_recorder
@@ -132,12 +307,6 @@ class FullQAPipeline(BaseReasoning):
             # TODO: previously return [], [] because we think this message as something
             # like "Hello", "I need help"...
             query = message
-        if trace_recorder:
-            trace_recorder.data["query_rewrite"] = {
-                "enabled": bool(self.use_rewrite and self.rewrite_pipeline),
-                "rewritten_question": query if query != message else None,
-            }
-
         docs, doc_ids = [], []
         plot_docs = []
         skipped_retriever_infos = []
@@ -145,7 +314,15 @@ class FullQAPipeline(BaseReasoning):
         for idx, retriever in enumerate(self.retrievers):
             retriever_node = self._prepare_child(retriever, f"retriever_{idx}")
             try:
-                retriever_docs = retriever_node(text=query)
+                try:
+                    retriever_docs = retriever_node(
+                        text=query,
+                        query_variants=query_variants,
+                    )
+                except TypeError as e:
+                    if "query_variants" not in str(e):
+                        raise
+                    retriever_docs = retriever_node(text=query)
             except Exception as e:
                 logger.exception("Retriever %s failed; continuing", retriever)
                 skipped_retriever_infos.append(
@@ -321,6 +498,73 @@ class FullQAPipeline(BaseReasoning):
         if evidences:
             answer.metadata["citation"] = SimpleNamespace(evidences=evidences)
 
+    @staticmethod
+    def _weak_claim_query(question: str, assessment: dict) -> str:
+        weak_sentences = [
+            str(item.get("sentence") or "")
+            for item in assessment.get("checks", [])
+            if item.get("status") in {"unsupported", "insufficient"}
+        ]
+        weak_text = " ".join(sentence for sentence in weak_sentences[:3] if sentence)
+        return " ".join([question, weak_text]).strip() or question
+
+    def verify_answer_support(
+        self,
+        answer,
+        docs: list[RetrievedDocument],
+        question: str,
+        history: list,
+        trace_recorder=None,
+    ) -> tuple[list[RetrievedDocument], dict, str]:
+        assessment = assess_answer_support(answer.text, docs)
+        gate = decide_evidence_gate(assessment, retry_used=False)
+        retry_triggered = False
+        retry_query = None
+        retry_docs: list[RetrievedDocument] = []
+        final_action = "accepted"
+
+        if gate.should_retry:
+            retry_triggered = True
+            retry_query = self._weak_claim_query(question, assessment)
+            try:
+                retry_docs, _ = self.retrieve(
+                    question,
+                    history,
+                    retrieval_query=retry_query,
+                    query_variants=[retry_query],
+                )
+            except Exception as exc:
+                if trace_recorder:
+                    trace_recorder.record_error("answer_verification_retry", exc)
+                retry_docs = []
+
+            doc_ids = {getattr(doc, "doc_id", None) for doc in docs}
+            for doc in retry_docs:
+                if getattr(doc, "doc_id", None) not in doc_ids:
+                    docs.append(doc)
+                    doc_ids.add(getattr(doc, "doc_id", None))
+
+            assessment = assess_answer_support(answer.text, docs)
+            gate = decide_evidence_gate(assessment, retry_used=True)
+            final_action = "retried"
+
+        if gate.should_refuse:
+            answer.text = build_refusal_answer(assessment)
+            answer.content = answer.text
+            answer.metadata["citation"] = None
+            final_action = "refused"
+
+        if trace_recorder:
+            trace_recorder.record_answer_verification(
+                assessment,
+                gate=gate,
+                retry_triggered=retry_triggered,
+                retry_query=retry_query,
+                retry_docs=retry_docs,
+                final_action=final_action,
+            )
+        return docs, assessment, final_action
+
     def show_citations_and_addons(self, answer, docs, question):
         # show the evidence
         with_citation, _ = self.answering_pipeline.prepare_citations(
@@ -395,18 +639,20 @@ class FullQAPipeline(BaseReasoning):
         except Exception:
             trace_recorder = None
 
-        if self.use_rewrite and self.rewrite_pipeline:
-            print("Chosen rewrite pipeline", self.rewrite_pipeline)
-            if trace_recorder:
-                with trace_recorder.timer("query_rewrite"):
-                    message = self.rewrite_pipeline(question=message).text
-            else:
-                message = self.rewrite_pipeline(question=message).text
-            print("Rewrite result", message)
+        original_question = message
+        retrieval_query, query_variants = self._build_retrieval_plan(
+            original_question,
+            trace_recorder,
+        )
 
         print(f"Retrievers {self.retrievers}")
         # should populate the context
-        docs, infos = self.retrieve(message, history)
+        docs, infos = self.retrieve(
+            original_question,
+            history,
+            retrieval_query=retrieval_query,
+            query_variants=query_variants,
+        )
         print(f"Got {len(docs)} retrieved documents")
         yield from infos
 
@@ -416,7 +662,7 @@ class FullQAPipeline(BaseReasoning):
 
         def generate_relevant_scores():
             nonlocal docs
-            docs = self.retrievers[0].generate_relevant_scores(message, docs)
+            docs = self.retrievers[0].generate_relevant_scores(original_question, docs)
 
         # generate relevant score using
         if evidence and self.retrievers:
@@ -428,7 +674,7 @@ class FullQAPipeline(BaseReasoning):
         if trace_recorder:
             with trace_recorder.timer("llm_generation"):
                 answer = yield from self.answering_pipeline.stream(
-                    question=message,
+                    question=original_question,
                     history=history,
                     evidence=evidence,
                     evidence_mode=evidence_mode,
@@ -438,7 +684,7 @@ class FullQAPipeline(BaseReasoning):
                 )
         else:
             answer = yield from self.answering_pipeline.stream(
-                question=message,
+                question=original_question,
                 history=history,
                 evidence=evidence,
                 evidence_mode=evidence_mode,
@@ -458,8 +704,20 @@ class FullQAPipeline(BaseReasoning):
         if scoring_thread:
             scoring_thread.join()
 
-        self.ensure_citation_fallback(answer, docs)
-        yield from self.show_citations_and_addons(answer, docs, message)
+        docs, verification, final_action = self.verify_answer_support(
+            answer,
+            docs,
+            original_question,
+            history,
+            trace_recorder,
+        )
+        if final_action == "refused":
+            yield Document(channel="chat", content=None)
+            yield Document(channel="chat", content=answer.text)
+
+        if final_action != "refused":
+            self.ensure_citation_fallback(answer, docs)
+        yield from self.show_citations_and_addons(answer, docs, original_question)
 
         return answer
 
@@ -467,7 +725,9 @@ class FullQAPipeline(BaseReasoning):
     def prepare_pipeline_instance(cls, settings, retrievers):
         return cls(
             retrievers=retrievers,
-            rewrite_pipeline=None,
+            rewrite_pipeline=RewriteQuestionPipeline.withx(),
+            hyde_pipeline=HyDEQuestionPipeline.withx(),
+            rag_fusion_pipeline=RagFusionQueryPipeline.withx(),
         )
 
     @classmethod
@@ -507,7 +767,9 @@ class FullQAPipeline(BaseReasoning):
         answer_pipeline.enable_mindmap = settings[f"{prefix}.create_mindmap"]
         answer_pipeline.enable_citation_viz = settings[f"{prefix}.create_citation_viz"]
         answer_pipeline.use_multimodal = settings[f"{prefix}.use_multimodal"]
-        answer_pipeline.system_prompt = settings[f"{prefix}.system_prompt"]
+        answer_pipeline.system_prompt = cls._append_system_guardrail(
+            settings[f"{prefix}.system_prompt"]
+        )
         answer_pipeline.qa_template = settings[f"{prefix}.qa_prompt"]
         if isinstance(answer_pipeline, AnswerWithInlineCitation):
             answer_pipeline.qa_citation_template = settings[f"{prefix}.qa_prompt"]
@@ -530,11 +792,39 @@ class FullQAPipeline(BaseReasoning):
 
         pipeline.trigger_context = settings[f"{prefix}.trigger_context"]
         pipeline.use_rewrite = states.get("app", {}).get("regen", False)
+        pipeline.retrieval_enhancement = cls._normalize_retrieval_enhancement(
+            settings.get("reasoning.retrieval_enhancement", "none")
+        )
         if pipeline.rewrite_pipeline:
-            pipeline.rewrite_pipeline.llm = llm
-            pipeline.rewrite_pipeline.lang = SUPPORTED_LANGUAGE_MAP.get(
-                settings["reasoning.lang"], "English"
-            )
+            lang = SUPPORTED_LANGUAGE_MAP.get(settings["reasoning.lang"], "English")
+            if hasattr(pipeline.rewrite_pipeline, "withx"):
+                pipeline.rewrite_pipeline = pipeline.rewrite_pipeline.withx(
+                    llm=llm,
+                    lang=lang,
+                )
+            else:
+                pipeline.rewrite_pipeline.llm = llm
+                pipeline.rewrite_pipeline.lang = lang
+        if pipeline.hyde_pipeline:
+            lang = SUPPORTED_LANGUAGE_MAP.get(settings["reasoning.lang"], "English")
+            if hasattr(pipeline.hyde_pipeline, "withx"):
+                pipeline.hyde_pipeline = pipeline.hyde_pipeline.withx(
+                    llm=llm,
+                    lang=lang,
+                )
+            else:
+                pipeline.hyde_pipeline.llm = llm
+                pipeline.hyde_pipeline.lang = lang
+        if pipeline.rag_fusion_pipeline:
+            lang = SUPPORTED_LANGUAGE_MAP.get(settings["reasoning.lang"], "English")
+            if hasattr(pipeline.rag_fusion_pipeline, "withx"):
+                pipeline.rag_fusion_pipeline = pipeline.rag_fusion_pipeline.withx(
+                    llm=llm,
+                    lang=lang,
+                )
+            else:
+                pipeline.rag_fusion_pipeline.llm = llm
+                pipeline.rag_fusion_pipeline.lang = lang
         return pipeline
 
     @classmethod

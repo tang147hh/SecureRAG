@@ -57,8 +57,12 @@ def tags_for(row: dict[str, str]) -> list[str]:
         return ["permission"]
     if question_type == "temporal_policy":
         return ["temporal_policy"]
+    if question_type == "global":
+        return ["global_summary"]
     if any(token in question for token in ("权限", "访问", "公共文档", "查看")):
         return ["permission"]
+    if any(token in question for token in ("整体", "总体", "涵盖", "核心", "主题")):
+        return ["global_summary"]
     if any(token in question for token in ("2026 年", "旧制度", "新制度")):
         return ["temporal_policy"]
     if any(token in question for token in ("BX-", "HT-", "编号")):

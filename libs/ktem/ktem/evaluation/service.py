@@ -7,6 +7,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from ktem.db.engine import engine
+from ktem.evidence import is_refusal_answer
 from ktem.permissions import can_read_source
 
 from .models import RagEvalDataset, RagEvalExample, RagEvalRun, _now
@@ -46,7 +47,29 @@ def _chunk_source_id(chunk: dict[str, Any] | None) -> str:
     ).strip()
 
 
+def _chunk_source_aliases(chunk: dict[str, Any] | None) -> set[str]:
+    if not chunk or not isinstance(chunk, dict):
+        return set()
+    metadata = chunk.get("metadata") or {}
+    aliases = {
+        chunk.get("source_id"),
+        chunk.get("source_name"),
+        metadata.get("file_id"),
+        metadata.get("source_id"),
+        metadata.get("file_name"),
+    }
+    return {str(alias).strip() for alias in aliases if str(alias or "").strip()}
+
+
 def _trace_source_ids(trace_data: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    for key in ("citation_chunks", "context_chunks", "candidate_chunks_after_rerank"):
+        for chunk in trace_data.get(key) or []:
+            ids.update(_chunk_source_aliases(chunk))
+    return ids
+
+
+def _trace_acl_source_ids(trace_data: dict[str, Any]) -> set[str]:
     ids: set[str] = set()
     for key in ("citation_chunks", "context_chunks", "candidate_chunks_after_rerank"):
         for chunk in trace_data.get(key) or []:
@@ -65,6 +88,17 @@ def _ranked_chunks(trace_data: dict[str, Any]) -> list[dict[str, Any]]:
     return [chunk for chunk in chunks if isinstance(chunk, dict)]
 
 
+def _layer_counts(chunks: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"summary_layer": 0, "detail_layer": 0}
+    for chunk in chunks:
+        layer = str(chunk.get("retrieval_layer") or "")
+        if not layer:
+            layer = "summary_layer" if chunk.get("type") == "summary" else "detail_layer"
+        if layer in counts:
+            counts[layer] += 1
+    return counts
+
+
 def _metric_k(trace_data: dict[str, Any], ranked_chunks: list[dict[str, Any]]) -> int:
     params = trace_data.get("retrieval_params") or {}
     for key in ("topK", "top_k", "topk"):
@@ -77,47 +111,40 @@ def _metric_k(trace_data: dict[str, Any], ranked_chunks: list[dict[str, Any]]) -
     return len(ranked_chunks)
 
 
-def _ranked_source_ids(trace_data: dict[str, Any]) -> tuple[list[str], int]:
+def _ranked_sources(trace_data: dict[str, Any]) -> tuple[list[set[str]], int]:
     chunks = _ranked_chunks(trace_data)
     k = _metric_k(trace_data, chunks)
-    return [_chunk_source_id(chunk) for chunk in chunks[:k]], k
+    return [_chunk_source_aliases(chunk) for chunk in chunks[:k]], k
 
 
 def _first_hit_rank(
-    source_ids: list[str], expected_source_ids: list[str]
+    ranked_sources: list[set[str]], expected_source_ids: list[str]
 ) -> int | None:
     expected = set(expected_source_ids)
-    for index, source_id in enumerate(source_ids, start=1):
-        if source_id in expected:
+    for index, aliases in enumerate(ranked_sources, start=1):
+        if aliases & expected:
             return index
     return None
 
 
-def _ndcg_at_k(source_ids: list[str], expected_source_ids: list[str]) -> float:
-    if not expected_source_ids or not source_ids:
+def _ndcg_at_k(ranked_sources: list[set[str]], expected_source_ids: list[str]) -> float:
+    if not expected_source_ids or not ranked_sources:
         return 0.0
     expected = set(expected_source_ids)
     seen: set[str] = set()
     dcg = 0.0
-    for rank, source_id in enumerate(source_ids, start=1):
-        if source_id in expected and source_id not in seen:
+    for rank, aliases in enumerate(ranked_sources, start=1):
+        matched = sorted((aliases & expected) - seen)
+        if matched:
             dcg += 1.0 / log2(rank + 1)
-            seen.add(source_id)
-    ideal_hits = min(len(expected), len(source_ids))
+            seen.add(matched[0])
+    ideal_hits = min(len(expected), len(ranked_sources))
     idcg = sum(1.0 / log2(rank + 1) for rank in range(1, ideal_hits + 1))
     return dcg / idcg if idcg else 0.0
 
 
 def _is_refusal_answer(answer: str) -> bool:
-    refusal_markers = (
-        "无法回答",
-        "没有相关信息",
-        "根据当前信息不足",
-        "未找到",
-        "不知道",
-        "无法确定",
-    )
-    return any(marker in answer for marker in refusal_markers)
+    return is_refusal_answer(answer)
 
 
 def calculate_metrics(
@@ -141,19 +168,25 @@ def calculate_metrics(
         keyword for keyword in expected_keywords if keyword.lower() in answer_lower
     ]
     citation_chunks = trace_data.get("citation_chunks") or []
-    ranked_source_ids, metric_k = _ranked_source_ids(trace_data)
-    first_hit_rank = _first_hit_rank(ranked_source_ids, expected_source_ids)
+    ranked_chunks = _ranked_chunks(trace_data)
+    retrieval_layer_counts = _layer_counts(ranked_chunks)
+    ranked_sources, metric_k = _ranked_sources(trace_data)
+    first_hit_rank = _first_hit_rank(ranked_sources, expected_source_ids)
     citation_hit_count = sum(
         1
         for chunk in citation_chunks
-        if _chunk_source_id(chunk) in set(expected_source_ids)
+        if _chunk_source_aliases(chunk) & set(expected_source_ids)
     )
     durations = trace_data.get("durations_ms") or {}
     tokens = trace_data.get("tokens") or {}
     errors = trace_data.get("errors") or []
+    verification = trace_data.get("answer_verification") or {}
+    verification_retry = verification.get("retry") or {}
     error = inputs.error
     if not error and errors:
         error = str((errors[-1] or {}).get("message") or "")
+    refusal_detected = _is_refusal_answer(answer)
+    expected_refusal = "no_answer" in tags
 
     return {
         "answer_present": bool(answer.strip()),
@@ -170,7 +203,7 @@ def calculate_metrics(
         "hit_k": metric_k,
         "mrr": (1 / first_hit_rank if first_hit_rank else 0),
         "ndcg_at_k": (
-            _ndcg_at_k(ranked_source_ids, expected_source_ids)
+            _ndcg_at_k(ranked_sources, expected_source_ids)
             if expected_source_ids
             else None
         ),
@@ -180,12 +213,23 @@ def calculate_metrics(
         "keyword_hit_count": len(hit_keywords),
         "keyword_total": len(expected_keywords),
         "matched_keywords": hit_keywords,
-        "refusal_accuracy": (
-            _is_refusal_answer(answer) if "no_answer" in tags else None
-        ),
+        "refusal_detected": refusal_detected,
+        "expected_refusal": expected_refusal,
+        "refusal_accuracy": refusal_detected if expected_refusal else None,
         "citation_support_rate": (
             citation_hit_count / len(citation_chunks) if citation_chunks else 0
         ),
+        "summary_layer_context_count": retrieval_layer_counts["summary_layer"],
+        "detail_layer_context_count": retrieval_layer_counts["detail_layer"],
+        "used_summary_layer": retrieval_layer_counts["summary_layer"] > 0,
+        "evidence_coverage": verification.get("evidence_coverage"),
+        "evidence_supported_count": verification.get("supported_count"),
+        "evidence_unsupported_count": verification.get("unsupported_count"),
+        "evidence_insufficient_count": verification.get("insufficient_count"),
+        "hallucination_risk_count": int(verification.get("unsupported_count") or 0)
+        + int(verification.get("insufficient_count") or 0),
+        "answer_verification_action": verification.get("final_action"),
+        "answer_verification_retry": bool(verification_retry.get("triggered")),
         "acl_leak_detected": bool(acl_leak_detected),
         "latency_ms": int(durations.get("total") or 0),
         "prompt_tokens": int(tokens.get("prompt_tokens") or 0),
@@ -518,7 +562,7 @@ class RagEvaluationStore:
     ) -> bool:
         if index is None:
             return False
-        source_ids = _trace_source_ids(trace_data)
+        source_ids = _trace_acl_source_ids(trace_data)
         if not source_ids:
             return False
         Source = (
@@ -533,7 +577,7 @@ class RagEvaluationStore:
         source_by_id = {str(source.id): source for (source,) in rows}
         for source_id in source_ids:
             source = source_by_id.get(source_id)
-            if source is None or not can_read_source(index, source, evaluator_user_id):
+            if source is not None and not can_read_source(index, source, evaluator_user_id):
                 return True
         return False
 

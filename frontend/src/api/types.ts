@@ -47,19 +47,87 @@ export interface RagTraceDetail extends RagTraceSummary {
     message_id?: string | null;
     user_id?: string;
     question?: string;
+    original_question?: string;
+    retrieval_query?: string;
+    retrieval_enhancement?: {
+      strategy?: string;
+      original_question?: string;
+      rewritten_question?: string | null;
+      hyde_document?: string | null;
+      fusion_queries?: string[];
+      retrieval_query?: string;
+    };
+    query_rewrite?: {
+      enabled?: boolean;
+      rewritten_question?: string | null;
+    };
+    hyde?: {
+      enabled?: boolean;
+      document?: string | null;
+    };
+    rag_fusion?: {
+      enabled?: boolean;
+      queries?: string[];
+      raw_response?: string | null;
+    };
     selected_file_ids?: string[];
     effective_principal?: Record<string, unknown>;
     retrieval_params?: Record<string, unknown>;
     acl?: Record<string, unknown>;
+    rerank_enabled?: boolean;
+    vector_candidate_chunks?: RagTraceChunk[];
+    text_candidate_chunks?: RagTraceChunk[];
+    fusion_query_candidates?: RagFusionQueryCandidates[];
+    fused_candidate_chunks?: RagTraceChunk[];
+    reranked_candidate_chunks?: RagTraceChunk[];
     candidate_chunks_before_rerank?: RagTraceChunk[];
     candidate_chunks_after_rerank?: RagTraceChunk[];
     context_chunks?: RagTraceChunk[];
     citation_chunks?: RagTraceChunk[];
+    answer_verification?: RagAnswerVerification;
     tokens?: Record<string, unknown>;
     durations_ms?: Record<string, unknown>;
     errors?: Array<Record<string, unknown>>;
     [key: string]: unknown;
   };
+}
+
+export interface RagAnswerVerification {
+  sentence_count?: number;
+  supported_count?: number;
+  unsupported_count?: number;
+  insufficient_count?: number;
+  evidence_coverage?: number;
+  checks?: RagAnswerSentenceCheck[];
+  gate?: {
+    status?: "supported" | "unsupported" | "insufficient" | string;
+    should_retry?: boolean;
+    should_refuse?: boolean;
+    reason?: string | null;
+  };
+  retry?: {
+    triggered?: boolean;
+    query?: string | null;
+    added_context_count?: number;
+    added_context_chunks?: RagTraceChunk[];
+  };
+  final_action?: string;
+}
+
+export interface RagAnswerSentenceCheck {
+  index?: number;
+  sentence?: string;
+  status?: "supported" | "unsupported" | "insufficient" | string;
+  score?: number;
+  reason?: string;
+  evidence?: Array<{
+    chunk_id?: string;
+    source_id?: string;
+    source_name?: string;
+    page_label?: string | null;
+    overlap_terms?: string[];
+    excerpt?: string;
+  }>;
 }
 
 export interface RagTraceChunk {
@@ -71,9 +139,31 @@ export interface RagTraceChunk {
   score?: number | null;
   reranking_score?: number | null;
   llm_reranking_score?: number | null;
+  retrieval_channel?: string | null;
+  retrieval_channels?: string[] | null;
+  vector_rank?: number | null;
+  text_rank?: number | null;
+  rrf_score?: number | null;
+  fusion_query?: string | null;
+  fusion_query_index?: number | null;
+  fusion_channel?: string | null;
+  fusion_query_hits?: number[] | null;
+  fusion_rank_contributions?: Record<string, number> | null;
+  final_rank?: number | null;
+  rank_before_fusion?: number | null;
+  rank_after_fusion?: number | null;
+  rank_after_rerank?: number | null;
   excerpt?: string;
   text?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface RagFusionQueryCandidates {
+  query?: string;
+  query_index?: number;
+  vector_candidate_chunks?: RagTraceChunk[];
+  text_candidate_chunks?: RagTraceChunk[];
+  fused_candidate_chunks?: RagTraceChunk[];
 }
 
 export interface ReferenceDocument {
@@ -143,6 +233,7 @@ export interface RetrievalSettings {
   topK: number;
   firstRoundMultiplier: number;
   retrievalMode: string;
+  enhancement: "none" | "rewrite" | "hyde" | "fusion" | string;
   rerank: boolean;
   llmRerank: boolean;
   mmr: boolean;
@@ -189,6 +280,9 @@ export interface RagEvalDataset {
   tags: string[];
   exampleCount: number;
   runCount: number;
+  permissionLeakCount: number;
+  permissionLeakTotal: number;
+  permissionLeakRate?: number | null;
   latestRunStatus?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -224,6 +318,12 @@ export interface RagEvalExamplePayload {
   tags?: string[];
 }
 
+export interface RagEvalRunPayload {
+  selectedFileIds?: string[] | null;
+  strategies?: string[];
+  experimentTag?: string | null;
+}
+
 export interface RagEvalRun {
   id: string;
   datasetId: string;
@@ -233,6 +333,7 @@ export interface RagEvalRun {
   question: string;
   answer: string;
   metrics: Record<string, unknown>;
+  settingsSnapshot?: Record<string, unknown>;
   traceId?: string | null;
   error?: string | null;
   createdAt: string;

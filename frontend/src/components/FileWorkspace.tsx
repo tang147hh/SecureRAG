@@ -58,6 +58,21 @@ const formatSize = (size: number) => {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 };
 
+const formatChinaDateTime = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+};
+
 export function FileWorkspace({
   directories,
   files,
@@ -451,7 +466,7 @@ export function FileWorkspace({
                   <PermissionBadge permission={file.permission} />
                 </span>
                 <span>{formatSize(file.size)}</span>
-                <span>{new Date(file.updatedAt).toLocaleString()}</span>
+                <span>{formatChinaDateTime(file.updatedAt)}</span>
               </article>
             ))
           ) : (
@@ -532,7 +547,7 @@ export function FileWorkspace({
                 </span>
                 <span>
                   <small>更新时间</small>
-                  <strong>{new Date(activeFileDetail.file.updatedAt).toLocaleString()}</strong>
+                  <strong>{formatChinaDateTime(activeFileDetail.file.updatedAt)}</strong>
                 </span>
                 <span>
                   <small>权限</small>

@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import tempfile
 import time
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from llama_index.core.readers.file.base import default_file_metadata_func
@@ -24,6 +26,7 @@ from ktem.db.engine import engine
 from ktem.db.models import Conversation as DbConversation
 from ktem.db.models import Settings as DbSettings
 from ktem.db.models import User
+from ktem.evaluation import ragas_metrics
 from ktem.evaluation import EvalMetricInputs, calculate_metrics, store as eval_store
 from ktem.permissions import (
     can_read_source,
@@ -49,16 +52,36 @@ from ktem.pages.chat import (
     STATE,
 )
 
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
+RAG_EVAL_COMPARISON_VARIANTS = (
+    "normal_query",
+    "rewrite",
+    "hyde",
+    "fusion",
+)
+RAG_EVAL_STRATEGY_LABELS = {
+    "current": "Current settings",
+    "normal_query": "Normal Query",
+    "rewrite": "Query Rewrite",
+    "hyde": "HyDE",
+    "fusion": "RAG-Fusion",
+    "vector": "Vector",
+    "text": "Full Text",
+    "hybrid_rrf": "Hybrid + RRF",
+    "hybrid_rrf+rerank": "Hybrid + RRF + Rerank",
+    "hybrid_rrf+rerank+mmr": "Hybrid + RRF + Rerank + MMR",
+}
+
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(CHINA_TZ).isoformat()
 
 
 def _to_iso(value: Any) -> str:
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            value = value.replace(tzinfo=CHINA_TZ)
+        return value.astimezone(CHINA_TZ).isoformat()
     return _now()
 
 
@@ -99,9 +122,7 @@ def _require_user_id(request: Request) -> str:
 
 def _load_user_settings(user_id: str, app_runtime: Any | None = None) -> dict[str, Any]:
     default_settings = (
-        app_runtime.default_settings.flatten()
-        if app_runtime is not None
-        else {}
+        app_runtime.default_settings.flatten() if app_runtime is not None else {}
     )
     with Session(engine) as session:
         statement = select(DbSettings).where(DbSettings.user == user_id)
@@ -162,6 +183,23 @@ def _reference_html_only(value: str) -> str:
         return ""
     blocks = re.findall(r"<details\b.*?</details>", value, flags=re.IGNORECASE | re.S)
     return "".join(blocks)
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def _normalize_retrieval_enhancement(
+    value: Any,
+) -> Literal["none", "rewrite", "hyde", "fusion"]:
+    normalized = str(value or "none").strip().lower()
+    if normalized in {"rewrite", "hyde", "fusion"}:
+        return normalized  # type: ignore[return-value]
+    return "none"
 
 
 class Citation(BaseModel):
@@ -282,7 +320,8 @@ class RetrievalSettings(BaseModel):
     topK: int = 10
     firstRoundMultiplier: int = 10
     retrievalMode: str = "hybrid"
-    rerank: bool = False
+    enhancement: Literal["none", "rewrite", "hyde", "fusion"] = "none"
+    rerank: bool = True
     llmRerank: bool = False
     mmr: bool = False
     prioritizeTable: bool = False
@@ -333,6 +372,9 @@ class RagEvalDatasetItem(BaseModel):
     tags: list[str] = Field(default_factory=list)
     exampleCount: int = 0
     runCount: int = 0
+    permissionLeakCount: int = 0
+    permissionLeakTotal: int = 0
+    permissionLeakRate: float | None = None
     latestRunStatus: str | None = None
     createdAt: str
     updatedAt: str
@@ -346,6 +388,12 @@ class RagEvalExamplePayload(BaseModel):
     evaluatorUserId: str | None = None
     selectedFileIds: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+
+
+class RagEvalRunPayload(BaseModel):
+    selectedFileIds: list[str] | None = None
+    strategies: list[str] = Field(default_factory=list)
+    experimentTag: str | None = None
 
 
 class RagEvalExampleItem(BaseModel):
@@ -371,6 +419,7 @@ class RagEvalRunItem(BaseModel):
     question: str
     answer: str = ""
     metrics: dict[str, Any] = Field(default_factory=dict)
+    settingsSnapshot: dict[str, Any] = Field(default_factory=dict)
     traceId: str | None = None
     error: str | None = None
     createdAt: str
@@ -481,20 +530,28 @@ class ReactApiService:
             dataset_id=dataset.id,
             limit=1,
         )
-        run_count = len(
-            eval_store.list_runs(
-                owner_user_id=dataset.owner_user_id,
-                dataset_id=dataset.id,
-                limit=1000,
-            )
+        all_runs = eval_store.list_runs(
+            owner_user_id=dataset.owner_user_id,
+            dataset_id=dataset.id,
+            limit=1000,
         )
+        completed_runs = [run for run in all_runs if run.status == "completed"]
+        leak_count = sum(
+            1
+            for run in completed_runs
+            if bool((run.metrics or {}).get("acl_leak_detected"))
+        )
+        leak_total = len(completed_runs)
         return RagEvalDatasetItem(
             id=str(dataset.id),
             name=str(dataset.name),
             description=str(dataset.description or ""),
             tags=list(dataset.tags or []),
             exampleCount=len(examples),
-            runCount=run_count,
+            runCount=len(all_runs),
+            permissionLeakCount=leak_count,
+            permissionLeakTotal=leak_total,
+            permissionLeakRate=(leak_count / leak_total if leak_total else None),
             latestRunStatus=runs[0].status if runs else None,
             createdAt=_to_iso(dataset.date_created),
             updatedAt=_to_iso(dataset.date_updated),
@@ -515,6 +572,209 @@ class ReactApiService:
             updatedAt=_to_iso(example.date_updated),
         )
 
+    def _eval_run_metrics_to_api(
+        self, run: Any, trace_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        metrics = dict(run.metrics or {})
+        if not run.example_id:
+            return metrics
+
+        example = eval_store.get_example(str(run.example_id), str(run.owner_user_id))
+        if example is None:
+            return metrics
+        if trace_data is None and run.trace_id:
+            trace = get_trace(run.trace_id, run.evaluator_user_id)
+            trace_data = trace.data if trace is not None else {}
+        if not trace_data:
+            return metrics
+
+        refreshed_metrics = calculate_metrics(
+            EvalMetricInputs(
+                answer=str(run.answer or ""),
+                references=list(run.references or []),
+                trace_data=trace_data or {},
+                expected_source_ids=list(example.expected_source_ids or []),
+                expected_keywords=list(example.expected_keywords or []),
+                error=run.error,
+                tags=list(example.tags or []),
+            ),
+            acl_leak_detected=bool(metrics.get("acl_leak_detected")),
+        )
+        refreshed_metrics.update(
+            {key: value for key, value in metrics.items() if key.startswith("ragas_")}
+        )
+        if metrics.get("evaluation_variant"):
+            refreshed_metrics["evaluation_variant"] = metrics["evaluation_variant"]
+        if metrics.get("strategy_label"):
+            refreshed_metrics["strategy_label"] = metrics["strategy_label"]
+        if metrics.get("experiment_tag"):
+            refreshed_metrics["experiment_tag"] = metrics["experiment_tag"]
+        return refreshed_metrics
+
+    def _settings_for_eval_variant(
+        self,
+        settings: ChatSettings,
+        variant: str,
+    ) -> ChatSettings:
+        next_settings = settings.model_copy(deep=True)
+        next_settings.retrieval.llmRerank = False
+        if variant == "normal_query":
+            next_settings.retrieval.enhancement = "none"
+            return next_settings
+        if variant == "rewrite":
+            next_settings.retrieval.enhancement = "rewrite"
+            return next_settings
+        if variant == "hyde":
+            next_settings.retrieval.enhancement = "hyde"
+            return next_settings
+        if variant == "fusion":
+            next_settings.retrieval.enhancement = "fusion"
+            next_settings.retrieval.retrievalMode = "hybrid"
+            return next_settings
+        if variant == "current":
+            return next_settings
+        if variant == "vector":
+            next_settings.retrieval.retrievalMode = "vector"
+            next_settings.retrieval.rerank = False
+            next_settings.retrieval.mmr = False
+        elif variant == "text":
+            next_settings.retrieval.retrievalMode = "text"
+            next_settings.retrieval.rerank = False
+            next_settings.retrieval.mmr = False
+        elif variant == "hybrid_rrf":
+            next_settings.retrieval.retrievalMode = "hybrid"
+            next_settings.retrieval.rerank = False
+            next_settings.retrieval.mmr = False
+        elif variant == "hybrid_rrf+rerank":
+            next_settings.retrieval.retrievalMode = "hybrid"
+            next_settings.retrieval.rerank = True
+            next_settings.retrieval.mmr = False
+        elif variant == "hybrid_rrf+rerank+mmr":
+            next_settings.retrieval.retrievalMode = "hybrid"
+            next_settings.retrieval.rerank = True
+            next_settings.retrieval.mmr = True
+        else:
+            raise ValueError(f"Unknown eval comparison variant: {variant}")
+        return next_settings
+
+    def _normalize_eval_strategies(
+        self,
+        strategies: list[str] | None,
+        *,
+        default: list[str] | None = None,
+    ) -> list[str]:
+        allowed = set(RAG_EVAL_STRATEGY_LABELS)
+        output: list[str] = []
+        for strategy in strategies or []:
+            normalized = str(strategy).strip()
+            if not normalized:
+                continue
+            if normalized not in allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"未知评测策略：{normalized}",
+                )
+            if normalized not in output:
+                output.append(normalized)
+        if output:
+            return output
+        return list(default or ["current"])
+
+    def _strategy_snapshot(
+        self,
+        settings: ChatSettings,
+        *,
+        strategy: str,
+        experiment_tag: str | None = None,
+    ) -> dict[str, Any]:
+        retrieval = settings.retrieval.model_dump()
+        retrieval_mode = str(retrieval.get("retrievalMode") or "hybrid")
+        enhancement = str(retrieval.get("enhancement") or "none")
+        snapshot = settings.model_dump()
+        snapshot.update(
+            {
+                "evaluation_variant": strategy,
+                "strategy_id": strategy,
+                "strategy_label": RAG_EVAL_STRATEGY_LABELS.get(strategy, strategy),
+                "experiment_tag": experiment_tag,
+                "retrieval_strategy": {
+                    "retrieval_mode": retrieval_mode,
+                    "enhancement": enhancement,
+                    "topK": retrieval.get("topK"),
+                    "firstRoundMultiplier": retrieval.get("firstRoundMultiplier"),
+                    "rerank": bool(retrieval.get("rerank")),
+                    "llm_rerank": bool(retrieval.get("llmRerank")),
+                    "mmr": bool(retrieval.get("mmr")),
+                    "prioritize_table": bool(retrieval.get("prioritizeTable")),
+                    "rrf": {
+                        "enabled": retrieval_mode == "hybrid",
+                        "k": 60 if retrieval_mode == "hybrid" else None,
+                    },
+                    "query_rewrite": {
+                        "enabled": enhancement == "rewrite",
+                        "implemented": True,
+                    },
+                    "hyde": {
+                        "enabled": enhancement == "hyde",
+                        "implemented": True,
+                    },
+                    "rag_fusion": {
+                        "enabled": enhancement == "fusion",
+                        "implemented": True,
+                        "query_count": 4 if enhancement == "fusion" else 0,
+                    },
+                },
+            }
+        )
+        return snapshot
+
+    def _settings_snapshot(
+        self,
+        settings: ChatSettings,
+        *,
+        variant: str | None = None,
+    ) -> dict[str, Any]:
+        return self._strategy_snapshot(settings, strategy=variant or "current")
+
+    def _ragas_eval_enabled(self) -> bool:
+        return _as_bool(
+            getattr(flowsettings, "KH_RAGAS_EVAL_ENABLED", False)
+        ) or _as_bool(os.environ.get("KH_RAGAS_EVAL_ENABLED", ""))
+
+    def _append_ragas_metrics(
+        self,
+        metrics: dict[str, Any],
+        *,
+        question: str,
+        answer: str,
+        trace_data: dict[str, Any] | None,
+        expected_answer: str | None,
+    ) -> dict[str, Any]:
+        for name in ragas_metrics.RAGAS_METRIC_NAMES:
+            metrics.setdefault(f"ragas_{name}", None)
+
+        if not self._ragas_eval_enabled():
+            metrics["ragas_enabled"] = False
+            return metrics
+
+        try:
+            contexts = ragas_metrics.extract_ragas_contexts(trace_data)
+            ragas_result = ragas_metrics.calculate_ragas_metrics(
+                question=question,
+                answer=answer,
+                contexts=contexts,
+                ground_truth=expected_answer,
+            )
+            for name in ragas_metrics.RAGAS_METRIC_NAMES:
+                metrics[f"ragas_{name}"] = ragas_result.get(name)
+            metrics["ragas_enabled"] = bool(ragas_result.get("ragas_enabled"))
+            if ragas_result.get("ragas_error"):
+                metrics["ragas_error"] = ragas_result["ragas_error"]
+        except Exception as exc:
+            metrics["ragas_enabled"] = False
+            metrics["ragas_error"] = str(exc)
+        return metrics
+
     def _eval_run_to_api(self, run: Any) -> RagEvalRunItem:
         return RagEvalRunItem(
             id=str(run.id),
@@ -524,7 +784,8 @@ class ReactApiService:
             status=str(run.status),
             question=str(run.question),
             answer=str(run.answer or ""),
-            metrics=dict(run.metrics or {}),
+            metrics=self._eval_run_metrics_to_api(run),
+            settingsSnapshot=dict(run.settings_snapshot or {}),
             traceId=run.trace_id,
             error=run.error,
             createdAt=_to_iso(run.date_created),
@@ -538,10 +799,12 @@ class ReactApiService:
             if trace is not None:
                 trace_detail = self._trace_detail_to_api(trace)
         base = self._eval_run_to_api(run).model_dump()
+        if trace_detail is not None:
+            base["metrics"] = self._eval_run_metrics_to_api(run, trace_detail.data)
+        base["settingsSnapshot"] = dict(run.settings_snapshot or {})
         return RagEvalRunDetail(
             **base,
             references=list(run.references or []),
-            settingsSnapshot=dict(run.settings_snapshot or {}),
             trace=trace_detail,
         )
 
@@ -560,7 +823,9 @@ class ReactApiService:
 
     def delete_conversation(self, conversation_id: str, user_id: str) -> None:
         with Session(engine) as session:
-            statement = select(DbConversation).where(DbConversation.id == conversation_id)
+            statement = select(DbConversation).where(
+                DbConversation.id == conversation_id
+            )
             conversation = session.exec(statement).one_or_none()
             if conversation is None:
                 return
@@ -579,14 +844,16 @@ class ReactApiService:
             raise HTTPException(status_code=400, detail="名称不能超过 40 个字符。")
 
         with Session(engine) as session:
-            statement = select(DbConversation).where(DbConversation.id == conversation_id)
+            statement = select(DbConversation).where(
+                DbConversation.id == conversation_id
+            )
             conversation = session.exec(statement).one_or_none()
             if conversation is None:
                 raise HTTPException(status_code=404, detail="会话不存在。")
             if conversation.user != user_id:
                 raise HTTPException(status_code=403, detail="只能重命名自己的会话。")
             conversation.name = title
-            conversation.date_updated = datetime.now(timezone.utc)
+            conversation.date_updated = datetime.now(CHINA_TZ)
             session.add(conversation)
             session.commit()
             session.refresh(conversation)
@@ -594,14 +861,18 @@ class ReactApiService:
 
     def list_messages(self, conversation_id: str, user_id: str) -> list[ChatMessage]:
         conversation = _get_conversation_or_404(conversation_id, user_id)
-        rows = conversation.data_source.get("messages", []) if conversation.data_source else []
+        rows = (
+            conversation.data_source.get("messages", [])
+            if conversation.data_source
+            else []
+        )
         retrieval_history = (
             conversation.data_source.get("retrieval_messages", [])
             if conversation.data_source
             else []
         )
         messages: list[ChatMessage] = []
-        base_time = conversation.date_created or datetime.now(timezone.utc)
+        base_time = conversation.date_created or datetime.now(CHINA_TZ)
         for index, row in enumerate(rows):
             if not isinstance(row, (list, tuple)):
                 continue
@@ -672,16 +943,22 @@ class ReactApiService:
         runtime = self.app_runtime
         stored = {}
         if runtime is not None and hasattr(runtime, "chat_page"):
-            stored = runtime.chat_page._read_chat_runtime_settings().get(str(user_id), {})
+            stored = runtime.chat_page._read_chat_runtime_settings().get(
+                str(user_id), {}
+            )
 
-        selected_template = stored.get("prompt_template_select") or DEFAULT_PROMPT_TEMPLATE_NAME
+        selected_template = (
+            stored.get("prompt_template_select") or DEFAULT_PROMPT_TEMPLATE_NAME
+        )
         template_text = DEFAULT_PROMPT_TEMPLATE_TEXT
         templates = DEFAULT_PROMPT_TEMPLATES
         if runtime is not None and hasattr(runtime, "chat_page"):
             templates = runtime.chat_page._load_prompt_template_map(user_id)
             if selected_template not in templates:
                 selected_template = next(iter(templates), DEFAULT_PROMPT_TEMPLATE_NAME)
-            template_text = templates.get(selected_template, DEFAULT_PROMPT_TEMPLATE_TEXT)
+            template_text = templates.get(
+                selected_template, DEFAULT_PROMPT_TEMPLATE_TEXT
+            )
         options = self._chat_setting_options(user_id)
 
         return ChatSettings(
@@ -698,7 +975,10 @@ class ReactApiService:
                 topK=int(stored.get("retrieval_top_k", 10)),
                 firstRoundMultiplier=int(stored.get("first_round_multiplier", 10)),
                 retrievalMode=stored.get("retrieval_mode") or "hybrid",
-                rerank=bool(stored.get("use_reranking", False)),
+                enhancement=_normalize_retrieval_enhancement(
+                    stored.get("retrieval_enhancement")
+                ),
+                rerank=bool(stored.get("use_reranking", True)),
                 llmRerank=bool(stored.get("use_llm_reranking", False)),
                 mmr=bool(stored.get("use_mmr", False)),
                 prioritizeTable=bool(stored.get("prioritize_table", False)),
@@ -706,7 +986,9 @@ class ReactApiService:
             options=options,
         )
 
-    def _chat_setting_options(self, user_id: str = "default") -> dict[str, list[SelectOption]]:
+    def _chat_setting_options(
+        self, user_id: str = "default"
+    ) -> dict[str, list[SelectOption]]:
         if self.app_runtime is None:
             return {}
         settings = self.app_runtime.default_settings
@@ -737,13 +1019,21 @@ class ReactApiService:
                 SelectOption(label="Vector", value="vector"),
                 SelectOption(label="Full Text", value="text"),
             ],
+            "retrievalEnhancement": [
+                SelectOption(label="None", value="none"),
+                SelectOption(label="Query Rewrite", value="rewrite"),
+                SelectOption(label="HyDE", value="hyde"),
+                SelectOption(label="RAG-Fusion", value="fusion"),
+            ],
             "promptTemplate": [
                 SelectOption(label=name, value=name) for name in templates.keys()
             ],
         }
 
     def save_chat_settings(self, settings: ChatSettings, user_id: str) -> ChatSettings:
-        template_name = (settings.promptTemplate or DEFAULT_PROMPT_TEMPLATE_NAME).strip()
+        template_name = (
+            settings.promptTemplate or DEFAULT_PROMPT_TEMPLATE_NAME
+        ).strip()
         if not template_name:
             raise HTTPException(status_code=400, detail="模板名称不能为空。")
 
@@ -752,7 +1042,9 @@ class ReactApiService:
             normalized_name = (name or "").strip()
             if normalized_name:
                 incoming_templates[normalized_name] = text or ""
-        templates = incoming_templates or self.chat_page._load_prompt_template_map(user_id)
+        templates = incoming_templates or self.chat_page._load_prompt_template_map(
+            user_id
+        )
         templates[template_name] = settings.promptTemplateText or ""
         self.chat_page._write_prompt_template_map(user_id, templates)
 
@@ -766,6 +1058,7 @@ class ReactApiService:
             settings.retrieval.topK,
             settings.retrieval.firstRoundMultiplier,
             settings.retrieval.retrievalMode,
+            settings.retrieval.enhancement,
             settings.retrieval.rerank,
             settings.retrieval.llmRerank,
             settings.retrieval.mmr,
@@ -795,7 +1088,9 @@ class ReactApiService:
                             source=index.name,
                             summary=self._source_summary(source),
                             updatedAt=_to_iso(source.date_created),
-                            permission=self._source_permission_label(index, source, user_id),
+                            permission=self._source_permission_label(
+                                index, source, user_id
+                            ),
                             citations=[],
                         )
                     )
@@ -805,7 +1100,10 @@ class ReactApiService:
         if self.app_runtime is None:
             raise HTTPException(status_code=503, detail="应用运行态尚未初始化。")
         for index in self.app_runtime.index_manager.indices:
-            if index._resources.get("Source") is not None and index._resources.get("FileGroup") is not None:
+            if (
+                index._resources.get("Source") is not None
+                and index._resources.get("FileGroup") is not None
+            ):
                 return index
         raise HTTPException(status_code=503, detail="文件索引器尚未准备好。")
 
@@ -833,7 +1131,9 @@ class ReactApiService:
             return "public"
         return "read"
 
-    def _file_permissions(self, index: Any, source_id: str) -> list[SourcePermissionItem]:
+    def _file_permissions(
+        self, index: Any, source_id: str
+    ) -> list[SourcePermissionItem]:
         return [
             SourcePermissionItem(
                 principalType=row.principal_type,
@@ -859,7 +1159,11 @@ class ReactApiService:
                 file_ids = self._visible_file_ids(
                     index,
                     user_id,
-                    [str(file_id) for file_id in (group.data or {}).get("files", []) if file_id],
+                    [
+                        str(file_id)
+                        for file_id in (group.data or {}).get("files", [])
+                        if file_id
+                    ],
                 )
                 directories.append(
                     FileDirectory(
@@ -885,7 +1189,9 @@ class ReactApiService:
                         updatedAt=_to_iso(source.date_created),
                         size=int(source.size or 0),
                         directoryId=file_to_directory.get(str(source.id)),
-                        permission=self._source_permission_label(index, source, user_id),
+                        permission=self._source_permission_label(
+                            index, source, user_id
+                        ),
                     )
                 )
 
@@ -900,14 +1206,14 @@ class ReactApiService:
         Source = index._resources["Source"]
         Index = index._resources["Index"]
         workspace = self.list_file_workspace(user_id)
-        workspace_file = next((file for file in workspace.files if file.id == file_id), None)
+        workspace_file = next(
+            (file for file in workspace.files if file.id == file_id), None
+        )
         if workspace_file is None:
             raise HTTPException(status_code=404, detail="文件不存在或无权访问。")
 
         with Session(engine) as session:
-            source = session.execute(
-                select(Source).where(Source.id == file_id)
-            ).first()
+            source = session.execute(select(Source).where(Source.id == file_id)).first()
             if source is None:
                 raise HTTPException(status_code=404, detail="文件不存在。")
             matches = session.execute(
@@ -919,7 +1225,9 @@ class ReactApiService:
             doc_ids = [row.target_id for (row,) in matches]
 
         docs = index._docstore.get(doc_ids) if doc_ids else []
-        docs = sorted(docs, key=lambda doc: doc.metadata.get("page_label", float("inf")))
+        docs = sorted(
+            docs, key=lambda doc: doc.metadata.get("page_label", float("inf"))
+        )
 
         chunk_type_counts: dict[str, int] = {}
         for doc in docs:
@@ -995,10 +1303,14 @@ class ReactApiService:
             if can_read_source(index, source, user_id)
         }
 
-    def _visible_file_ids(self, index: Any, user_id: str, file_ids: list[str]) -> list[str]:
+    def _visible_file_ids(
+        self, index: Any, user_id: str, file_ids: list[str]
+    ) -> list[str]:
         return filter_source_ids(index, self._unique_file_ids(file_ids), user_id)
 
-    def create_directory(self, payload: CreateDirectoryPayload, user_id: str) -> FileDirectory:
+    def create_directory(
+        self, payload: CreateDirectoryPayload, user_id: str
+    ) -> FileDirectory:
         index = self._file_index()
         FileGroup = index._resources["FileGroup"]
         name = payload.name.strip()
@@ -1008,7 +1320,9 @@ class ReactApiService:
             raise HTTPException(status_code=400, detail="目录名称不能超过 40 个字符。")
 
         with Session(engine) as session:
-            existing = session.query(FileGroup).filter_by(name=name, user=user_id).first()
+            existing = (
+                session.query(FileGroup).filter_by(name=name, user=user_id).first()
+            )
             if existing:
                 raise HTTPException(status_code=409, detail=f"目录 {name} 已存在。")
             group = FileGroup(
@@ -1043,7 +1357,9 @@ class ReactApiService:
                     raise HTTPException(status_code=400, detail="目录名称不能为空。")
                 group.name = name
             if payload.fileIds is not None:
-                group.data = {"files": self._visible_file_ids(index, user_id, payload.fileIds)}
+                group.data = {
+                    "files": self._visible_file_ids(index, user_id, payload.fileIds)
+                }
             session.add(group)
             session.commit()
             session.refresh(group)
@@ -1077,7 +1393,9 @@ class ReactApiService:
         with Session(engine) as session:
             target_group = None
             if payload.directoryId:
-                target_group = session.query(FileGroup).filter_by(id=payload.directoryId).first()
+                target_group = (
+                    session.query(FileGroup).filter_by(id=payload.directoryId).first()
+                )
                 if not target_group:
                     raise HTTPException(status_code=404, detail="目标目录不存在。")
                 if not self._can_access_group(target_group, index, user_id):
@@ -1087,15 +1405,25 @@ class ReactApiService:
             if index.config.get("private", False):
                 group_statement = group_statement.where(FileGroup.user == user_id)
             for (group,) in session.execute(group_statement).all():
-                current = [str(file_id) for file_id in (group.data or {}).get("files", []) if file_id]
+                current = [
+                    str(file_id)
+                    for file_id in (group.data or {}).get("files", [])
+                    if file_id
+                ]
                 next_files = [file_id for file_id in current if file_id not in file_ids]
                 if next_files != current:
                     group.data = {"files": next_files}
                     session.add(group)
 
             if target_group:
-                current = [str(file_id) for file_id in (target_group.data or {}).get("files", []) if file_id]
-                target_group.data = {"files": self._unique_file_ids(current + ordered_file_ids)}
+                current = [
+                    str(file_id)
+                    for file_id in (target_group.data or {}).get("files", [])
+                    if file_id
+                ]
+                target_group.data = {
+                    "files": self._unique_file_ids(current + ordered_file_ids)
+                }
                 session.add(target_group)
             session.commit()
 
@@ -1139,7 +1467,9 @@ class ReactApiService:
             )
             for chunk_index, chunk in enumerate(chunks):
                 title_match = re.search(r"<summary[^>]*>(.*?)</summary>", chunk, re.S)
-                raw_title = _html_to_text(title_match.group(1)) if title_match else "引用依据"
+                raw_title = (
+                    _html_to_text(title_match.group(1)) if title_match else "引用依据"
+                )
                 excerpt = _html_to_text(chunk)
                 if not excerpt:
                     continue
@@ -1173,7 +1503,9 @@ class ReactApiService:
             if index.selector is None:
                 continue
             if isinstance(index.selector, int):
-                components.append(("select" if selected_ids else "all", selected_ids, user_id))
+                components.append(
+                    ("select" if selected_ids else "all", selected_ids, user_id)
+                )
             else:
                 components.extend(
                     ("select", selected_ids, user_id)
@@ -1187,23 +1519,35 @@ class ReactApiService:
     ) -> dict[str, Any]:
         principal = resolve_principal(user_id)
         permission_entries: list[dict[str, Any]] = []
+        filtered_selection_count = 0
         try:
             index = self._file_index()
             visible_ids = set(self._visible_file_ids(index, user_id, selected_file_ids))
+            filtered_selection_count = len(
+                [
+                    source_id
+                    for source_id in selected_file_ids
+                    if source_id not in visible_ids
+                ]
+            )
             for source_id in selected_file_ids:
+                if str(source_id) not in visible_ids:
+                    continue
                 permission_entries.append(
                     {
                         "source_id": str(source_id),
-                        "read": str(source_id) in visible_ids,
+                        "read": True,
                     }
                 )
         except Exception:
             permission_entries = []
+            filtered_selection_count = 0
         return {
             "principal": {"type": principal.type, "id": principal.id},
             "roles": [],
             "departments": [],
             "permissions": permission_entries,
+            "filtered_selection_count": filtered_selection_count,
         }
 
     async def upload_files(
@@ -1222,7 +1566,9 @@ class ReactApiService:
             and options.chunkOverlap is not None
             and options.chunkOverlap >= options.chunkSize
         ):
-            raise HTTPException(status_code=400, detail="chunk_overlap 必须小于 chunk_size。")
+            raise HTTPException(
+                status_code=400, detail="chunk_overlap 必须小于 chunk_size。"
+            )
 
         temp_dir = Path(tempfile.mkdtemp(prefix="react-upload-"))
         saved_paths: list[str] = []
@@ -1245,7 +1591,9 @@ class ReactApiService:
             if options.chunkSize is not None:
                 settings[f"index.options.{index.id}.chunk_size"] = options.chunkSize
             if options.chunkOverlap is not None:
-                settings[f"index.options.{index.id}.chunk_overlap"] = options.chunkOverlap
+                settings[f"index.options.{index.id}.chunk_overlap"] = (
+                    options.chunkOverlap
+                )
             file_ids = await asyncio.to_thread(
                 self.chat_page.first_indexing_file_fn,
                 saved_paths,
@@ -1274,7 +1622,9 @@ class ReactApiService:
                     )
             if uploaded_file_ids and directory_id:
                 self.move_files(
-                    MoveFilesPayload(fileIds=uploaded_file_ids, directoryId=directory_id),
+                    MoveFilesPayload(
+                        fileIds=uploaded_file_ids, directoryId=directory_id
+                    ),
                     user_id,
                 )
             return uploaded_references
@@ -1295,10 +1645,14 @@ class ReactApiService:
                 raise HTTPException(status_code=404, detail="文件不存在。")
             source = row[0]
             if self._source_permission_label(index, source, user_id) != "owner":
-                raise HTTPException(status_code=403, detail="只有文件所有者可以重新 embedding。")
+                raise HTTPException(
+                    status_code=403, detail="只有文件所有者可以重新 embedding。"
+                )
             stored_path = index._resources["FileStoragePath"] / str(source.path)
             if not stored_path.exists():
-                raise HTTPException(status_code=404, detail="原始文件不存在，无法重新 embedding。")
+                raise HTTPException(
+                    status_code=404, detail="原始文件不存在，无法重新 embedding。"
+                )
             source_name = str(source.name)
 
         options = UploadIndexingOptions(
@@ -1311,7 +1665,9 @@ class ReactApiService:
             and options.chunkOverlap is not None
             and options.chunkOverlap >= options.chunkSize
         ):
-            raise HTTPException(status_code=400, detail="chunk_overlap 必须小于 chunk_size。")
+            raise HTTPException(
+                status_code=400, detail="chunk_overlap 必须小于 chunk_size。"
+            )
 
         before_detail = self.get_file_detail(file_id, user_id)
         temp_dir = Path(tempfile.mkdtemp(prefix="react-reembed-"))
@@ -1338,11 +1694,7 @@ class ReactApiService:
 
         detail = self.get_file_detail(file_id, user_id)
         if detail.chunkCount == 0:
-            prefix = (
-                "旧索引可能已被清空，"
-                if before_detail.chunkCount > 0
-                else ""
-            )
+            prefix = "旧索引可能已被清空，" if before_detail.chunkCount > 0 else ""
             raise HTTPException(
                 status_code=500,
                 detail=(
@@ -1383,12 +1735,16 @@ class ReactApiService:
         pipeline.finish(
             file_id,
             file_path,
-            chunk_size=int(pipeline.splitter._kwargs.get("chunk_size", 0))
-            if pipeline.splitter
-            else None,
-            chunk_overlap=int(pipeline.splitter._kwargs.get("chunk_overlap", 0))
-            if pipeline.splitter
-            else None,
+            chunk_size=(
+                int(pipeline.splitter._kwargs.get("chunk_size", 0))
+                if pipeline.splitter
+                else None
+            ),
+            chunk_overlap=(
+                int(pipeline.splitter._kwargs.get("chunk_overlap", 0))
+                if pipeline.splitter
+                else None
+            ),
         )
 
     def _delete_file_chunks(self, index: Any, file_id: str) -> None:
@@ -1424,7 +1780,9 @@ class ReactApiService:
             if row is not None:
                 source = row[0]
                 if self._source_permission_label(index, source, user_id) != "owner":
-                    raise HTTPException(status_code=403, detail="只有文件所有者可以删除文件。")
+                    raise HTTPException(
+                        status_code=403, detail="只有文件所有者可以删除文件。"
+                    )
                 stored_hash = str(source.path)
                 stored_path = index._resources["FileStoragePath"] / stored_hash
 
@@ -1451,7 +1809,9 @@ class ReactApiService:
             session.execute(delete(Source).where(Source.id == str(file_id)))
             group_statement = select(FileGroup)
             for (group,) in session.execute(group_statement).all():
-                current = [str(item) for item in (group.data or {}).get("files", []) if item]
+                current = [
+                    str(item) for item in (group.data or {}).get("files", []) if item
+                ]
                 next_files = [item for item in current if item != file_id]
                 if next_files != current:
                     group.data = {"files": next_files}
@@ -1467,7 +1827,9 @@ class ReactApiService:
         retrieval_content: str,
     ) -> None:
         with Session(engine) as session:
-            statement = select(DbConversation).where(DbConversation.id == conversation_id)
+            statement = select(DbConversation).where(
+                DbConversation.id == conversation_id
+            )
             conversation = session.exec(statement).one_or_none()
             if conversation is None:
                 raise HTTPException(status_code=404, detail="会话不存在。")
@@ -1491,7 +1853,7 @@ class ReactApiService:
                 }
             )
             conversation.data_source = data_source
-            conversation.date_updated = datetime.now(timezone.utc)
+            conversation.date_updated = datetime.now(CHINA_TZ)
             if len(messages) == 1 and conversation.name.startswith("Untitled -"):
                 conversation.name = user_text[:40] or conversation.name
             session.add(conversation)
@@ -1511,7 +1873,9 @@ class ReactApiService:
         chat_history = chat_history or []
         state = state or STATE
         settings = _load_user_settings(user_id, self.app_runtime)
-        selected_components = self._selected_components(user_id, payload.selectedFileIds)
+        selected_components = self._selected_components(
+            user_id, payload.selectedFileIds
+        )
         prompt_text = payload.settings.promptTemplateText
         prompt_templates = payload.settings.promptTemplates or {}
         if prompt_templates.get(payload.settings.promptTemplate):
@@ -1530,6 +1894,7 @@ class ReactApiService:
             payload.settings.retrieval.topK,
             payload.settings.retrieval.firstRoundMultiplier,
             payload.settings.retrieval.retrievalMode,
+            payload.settings.retrieval.enhancement,
             payload.settings.retrieval.rerank,
             payload.settings.retrieval.llmRerank,
             payload.settings.retrieval.mmr,
@@ -1547,6 +1912,7 @@ class ReactApiService:
             "topK": payload.settings.retrieval.topK,
             "firstRoundMultiplier": payload.settings.retrieval.firstRoundMultiplier,
             "retrievalMode": payload.settings.retrieval.retrievalMode,
+            "enhancement": payload.settings.retrieval.enhancement,
             "rerank": payload.settings.retrieval.rerank,
             "llmRerank": payload.settings.retrieval.llmRerank,
             "mmr": payload.settings.retrieval.mmr,
@@ -1573,11 +1939,18 @@ class ReactApiService:
         retrieval_content = ""
         last_emit_len = 0
         try:
-            for response in pipeline.stream(payload.content, payload.conversationId, chat_history):
+            for response in pipeline.stream(
+                payload.content, payload.conversationId, chat_history
+            ):
                 if not getattr(response, "channel", None):
                     continue
                 if response.channel == "chat":
-                    content = response.content or ""
+                    raw_content = response.content
+                    if raw_content is None:
+                        answer_text = ""
+                        last_emit_len = 0
+                        continue
+                    content = str(raw_content)
                     answer_text += content
                     if content:
                         emit_token(content)
@@ -1633,8 +2006,16 @@ class ReactApiService:
         if conversation.user != user_id:
             raise HTTPException(status_code=403, detail="只能在自己的会话中发送消息。")
 
-        chat_history = conversation.data_source.get("messages", []) if conversation.data_source else []
-        state = conversation.data_source.get("state", STATE) if conversation.data_source else STATE
+        chat_history = (
+            conversation.data_source.get("messages", [])
+            if conversation.data_source
+            else []
+        )
+        state = (
+            conversation.data_source.get("state", STATE)
+            if conversation.data_source
+            else STATE
+        )
         turn_index = len(chat_history)
         started = time.perf_counter()
         result = self.run_rag_once(
@@ -1666,7 +2047,9 @@ class ReactApiService:
             message=message, references=result.references, trace=result.trace
         )
 
-    def send_message(self, payload: SendMessagePayload, user_id: str) -> SendMessageResult:
+    def send_message(
+        self, payload: SendMessagePayload, user_id: str
+    ) -> SendMessageResult:
         tokens: list[str] = []
         return self._run_pipeline_sync(payload, user_id, tokens.append)
 
@@ -1774,22 +2157,38 @@ class ReactApiService:
         self,
         example: Any,
         owner_user_id: str,
+        selected_file_ids: list[str] | None = None,
+        run: Any | None = None,
+        variant: str | None = None,
+        experiment_tag: str | None = None,
     ) -> RagEvalRunDetail:
         settings = self.get_chat_settings(owner_user_id)
-        settings_snapshot = settings.model_dump()
-        run = eval_store.create_run(
-            dataset_id=example.dataset_id,
-            example_id=example.id,
-            owner_user_id=owner_user_id,
-            evaluator_user_id=example.evaluator_user_id,
-            question=example.question,
-            settings_snapshot=settings_snapshot,
+        strategy = variant or "current"
+        settings = self._settings_for_eval_variant(settings, strategy)
+        settings_snapshot = self._strategy_snapshot(
+            settings,
+            strategy=strategy,
+            experiment_tag=experiment_tag,
         )
+        effective_selected_file_ids = (
+            list(selected_file_ids)
+            if selected_file_ids is not None
+            else list(example.selected_file_ids or [])
+        )
+        if run is None:
+            run = eval_store.create_run(
+                dataset_id=example.dataset_id,
+                example_id=example.id,
+                owner_user_id=owner_user_id,
+                evaluator_user_id=example.evaluator_user_id,
+                question=example.question,
+                settings_snapshot=settings_snapshot,
+            )
         payload = SendMessagePayload(
             conversationId=f"eval-{run.id}",
             content=example.question,
             settings=settings,
-            selectedFileIds=list(example.selected_file_ids or []),
+            selectedFileIds=effective_selected_file_ids,
         )
         message_id = f"eval-{run.id}-assistant"
         answer = ""
@@ -1830,6 +2229,18 @@ class ReactApiService:
                 ),
                 acl_leak_detected=acl_leak,
             )
+            self._append_ragas_metrics(
+                metrics,
+                question=example.question,
+                answer=answer,
+                trace_data=result.traceData,
+                expected_answer=example.expected_answer,
+            )
+            if variant:
+                metrics["evaluation_variant"] = variant
+            metrics["strategy_label"] = settings_snapshot["strategy_label"]
+            if experiment_tag:
+                metrics["experiment_tag"] = experiment_tag
             status = "completed"
         except Exception as exc:
             error = getattr(exc, "detail", None) or str(exc)
@@ -1848,6 +2259,18 @@ class ReactApiService:
                 ),
                 acl_leak_detected=False,
             )
+            self._append_ragas_metrics(
+                metrics,
+                question=example.question,
+                answer=answer,
+                trace_data=trace_data,
+                expected_answer=example.expected_answer,
+            )
+            if variant:
+                metrics["evaluation_variant"] = variant
+            metrics["strategy_label"] = settings_snapshot["strategy_label"]
+            if experiment_tag:
+                metrics["experiment_tag"] = experiment_tag
             status = "failed"
 
         finished = eval_store.finish_run(
@@ -1868,12 +2291,152 @@ class ReactApiService:
             raise HTTPException(status_code=404, detail="样例不存在。")
         return self._run_eval_example_sync(example, user_id)
 
-    def run_eval_dataset(self, dataset_id: str, user_id: str) -> list[RagEvalRunItem]:
+    def start_eval_example(
+        self,
+        example_id: str,
+        user_id: str,
+        selected_file_ids: list[str] | None = None,
+        strategy: str = "current",
+        experiment_tag: str | None = None,
+    ) -> RagEvalRunDetail:
+        try:
+            example = eval_store.require_example(example_id, user_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="样例不存在。")
+
+        settings = self._settings_for_eval_variant(self.get_chat_settings(user_id), strategy)
+        run = eval_store.create_run(
+            dataset_id=example.dataset_id,
+            example_id=example.id,
+            owner_user_id=user_id,
+            evaluator_user_id=example.evaluator_user_id,
+            question=example.question,
+            settings_snapshot=self._strategy_snapshot(
+                settings,
+                strategy=strategy,
+                experiment_tag=experiment_tag,
+            ),
+        )
+        return self._eval_run_detail_to_api(run)
+
+    def start_eval_example_comparison(
+        self,
+        example_id: str,
+        user_id: str,
+        selected_file_ids: list[str] | None = None,
+        strategies: list[str] | None = None,
+        experiment_tag: str | None = None,
+    ) -> list[RagEvalRunItem]:
+        try:
+            example = eval_store.require_example(example_id, user_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="样例不存在。")
+
+        variants = self._normalize_eval_strategies(
+            strategies,
+            default=list(RAG_EVAL_COMPARISON_VARIANTS),
+        )
+        base_settings = self.get_chat_settings(user_id)
+        runs: list[RagEvalRunItem] = []
+        for variant in variants:
+            settings = self._settings_for_eval_variant(base_settings, variant)
+            run = eval_store.create_run(
+                dataset_id=example.dataset_id,
+                example_id=example.id,
+                owner_user_id=user_id,
+                evaluator_user_id=example.evaluator_user_id,
+                question=example.question,
+                settings_snapshot=self._strategy_snapshot(
+                    settings,
+                    strategy=variant,
+                    experiment_tag=experiment_tag,
+                ),
+            )
+            runs.append(self._eval_run_to_api(run))
+        return runs
+
+    def finish_started_eval_example(
+        self,
+        run_id: str,
+        example_id: str,
+        owner_user_id: str,
+        selected_file_ids: list[str] | None = None,
+        variant: str | None = None,
+        experiment_tag: str | None = None,
+    ) -> None:
+        try:
+            example = eval_store.require_example(example_id, owner_user_id)
+        except KeyError:
+            eval_store.finish_run(
+                run_id,
+                status="failed",
+                answer="",
+                references=[],
+                metrics={"error": "example_not_found"},
+                error="样例不存在。",
+            )
+            return
+
+        try:
+            run = eval_store.get_run(run_id, owner_user_id)
+            if run is None:
+                return
+            self._run_eval_example_sync(
+                example,
+                owner_user_id,
+                selected_file_ids=selected_file_ids,
+                run=run,
+                variant=variant,
+                experiment_tag=experiment_tag,
+            )
+        except Exception as exc:
+            metrics = {"error": str(exc)}
+            if variant:
+                metrics["evaluation_variant"] = variant
+                metrics["strategy_label"] = RAG_EVAL_STRATEGY_LABELS.get(
+                    variant,
+                    variant,
+                )
+            if experiment_tag:
+                metrics["experiment_tag"] = experiment_tag
+            eval_store.finish_run(
+                run_id,
+                status="failed",
+                answer="",
+                references=[],
+                metrics=metrics,
+                error=getattr(exc, "detail", None) or str(exc),
+            )
+
+    def start_eval_dataset(
+        self,
+        dataset_id: str,
+        user_id: str,
+        selected_file_ids: list[str] | None = None,
+        strategies: list[str] | None = None,
+        experiment_tag: str | None = None,
+    ) -> list[RagEvalRunItem]:
         examples = self.list_eval_examples(dataset_id, user_id)
         runs: list[RagEvalRunItem] = []
+        base_settings = self.get_chat_settings(user_id)
+        variants = self._normalize_eval_strategies(strategies)
         for item in examples:
             example = eval_store.require_example(item.id, user_id)
-            runs.append(self._run_eval_example_sync(example, user_id))
+            for variant in variants:
+                settings = self._settings_for_eval_variant(base_settings, variant)
+                run = eval_store.create_run(
+                    dataset_id=example.dataset_id,
+                    example_id=example.id,
+                    owner_user_id=user_id,
+                    evaluator_user_id=example.evaluator_user_id,
+                    question=example.question,
+                    settings_snapshot=self._strategy_snapshot(
+                        settings,
+                        strategy=variant,
+                        experiment_tag=experiment_tag,
+                    ),
+                )
+                runs.append(self._eval_run_to_api(run))
         return runs
 
     def list_eval_runs(
@@ -1987,10 +2550,14 @@ async def delete_conversation(conversation_id: str, request: Request):
 async def rename_conversation(
     conversation_id: str, payload: RenameConversationPayload, request: Request
 ):
-    return service.rename_conversation(conversation_id, payload.title, _require_user_id(request))
+    return service.rename_conversation(
+        conversation_id, payload.title, _require_user_id(request)
+    )
 
 
-@router.get("/conversations/{conversation_id}/messages", response_model=list[ChatMessage])
+@router.get(
+    "/conversations/{conversation_id}/messages", response_model=list[ChatMessage]
+)
 async def list_messages(conversation_id: str, request: Request):
     return service.list_messages(conversation_id, _require_user_id(request))
 
@@ -2086,24 +2653,98 @@ async def delete_eval_example(example_id: str, request: Request):
 
 
 @router.post("/eval/examples/{example_id}/run", response_model=RagEvalRunDetail)
-async def run_eval_example(example_id: str, request: Request):
-    return await asyncio.to_thread(
-        service.run_eval_example,
+async def run_eval_example(
+    example_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: RagEvalRunPayload | None = Body(default=None),
+):
+    payload = payload or RagEvalRunPayload()
+    user_id = _require_user_id(request)
+    run = service.start_eval_example(
         example_id,
-        _require_user_id(request),
+        user_id,
+        selected_file_ids=payload.selectedFileIds,
+        experiment_tag=payload.experimentTag,
     )
+    background_tasks.add_task(
+        service.finish_started_eval_example,
+        run.id,
+        example_id,
+        user_id,
+        payload.selectedFileIds,
+        "current",
+        payload.experimentTag,
+    )
+    return run
+
+
+@router.post(
+    "/eval/examples/{example_id}/compare",
+    response_model=list[RagEvalRunItem],
+)
+async def compare_eval_example(
+    example_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: RagEvalRunPayload | None = Body(default=None),
+):
+    payload = payload or RagEvalRunPayload()
+    user_id = _require_user_id(request)
+    runs = service.start_eval_example_comparison(
+        example_id,
+        user_id,
+        selected_file_ids=payload.selectedFileIds,
+        strategies=payload.strategies,
+        experiment_tag=payload.experimentTag,
+    )
+    for run in runs:
+        variant = str(run.settingsSnapshot.get("strategy_id") or "current")
+        background_tasks.add_task(
+            service.finish_started_eval_example,
+            run.id,
+            example_id,
+            user_id,
+            payload.selectedFileIds,
+            variant,
+            payload.experimentTag,
+        )
+    return runs
 
 
 @router.post(
     "/eval/datasets/{dataset_id}/run",
     response_model=list[RagEvalRunItem],
 )
-async def run_eval_dataset(dataset_id: str, request: Request):
-    return await asyncio.to_thread(
-        service.run_eval_dataset,
+async def run_eval_dataset(
+    dataset_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: RagEvalRunPayload | None = Body(default=None),
+):
+    payload = payload or RagEvalRunPayload()
+    user_id = _require_user_id(request)
+    runs = service.start_eval_dataset(
         dataset_id,
-        _require_user_id(request),
+        user_id,
+        selected_file_ids=payload.selectedFileIds,
+        strategies=payload.strategies,
+        experiment_tag=payload.experimentTag,
     )
+    for run in runs:
+        if not run.exampleId:
+            continue
+        variant = str(run.settingsSnapshot.get("strategy_id") or "current")
+        background_tasks.add_task(
+            service.finish_started_eval_example,
+            run.id,
+            run.exampleId,
+            user_id,
+            payload.selectedFileIds,
+            variant,
+            payload.experimentTag,
+        )
+    return runs
 
 
 @router.get("/eval/runs", response_model=list[RagEvalRunItem])

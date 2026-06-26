@@ -10,6 +10,7 @@ from sqlmodel import SQLModel
 from ktem import react_api
 from ktem.evaluation import EvalMetricInputs, calculate_metrics
 from ktem.evaluation.models import RagEvalDataset, RagEvalExample, RagEvalRun
+from ktem.evaluation.ragas_metrics import extract_ragas_contexts
 from ktem.permissions import permission_service
 from ktem.permissions.models import SourcePermission
 from ktem.trace import RagTraceRecorder, save_trace
@@ -136,6 +137,68 @@ def test_ranking_metrics_are_zero_when_expected_sources_miss():
     assert metrics["ndcg_at_k"] == 0
 
 
+def test_source_metrics_match_file_name_aliases_from_trace_chunks():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="命中了正确制度。",
+            references=[],
+            trace_data={
+                "retrieval_params": {"topK": 2},
+                "context_chunks": [
+                    {
+                        "source_id": "uuid-1",
+                        "source_name": "long_policy_mixed.md",
+                        "metadata": {"file_id": "uuid-1"},
+                    },
+                    {"source_id": "uuid-2", "source_name": "other.md"},
+                ],
+                "citation_chunks": [
+                    {"source_id": "uuid-1", "source_name": "long_policy_mixed.md"},
+                    {"source_id": "uuid-2", "source_name": "other.md"},
+                ],
+            },
+            expected_source_ids=["long_policy_mixed.md"],
+            expected_keywords=[],
+        )
+    )
+
+    assert metrics["expected_source_hit_rate"] == 1
+    assert metrics["hit_at_k"] is True
+    assert metrics["mrr"] == 1
+    assert metrics["ndcg_at_k"] == 1
+    assert metrics["citation_support_rate"] == 0.5
+
+
+def test_metrics_report_summary_and_detail_layer_usage():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="文档整体涵盖假期和权限。",
+            references=[],
+            trace_data={
+                "context_chunks": [
+                    {
+                        "source_id": "doc-1",
+                        "type": "summary",
+                        "retrieval_layer": "summary_layer",
+                    },
+                    {
+                        "source_id": "doc-1",
+                        "type": "text",
+                        "retrieval_layer": "detail_layer",
+                    },
+                ],
+            },
+            expected_source_ids=["doc-1"],
+            expected_keywords=[],
+            tags=["global_summary"],
+        )
+    )
+
+    assert metrics["summary_layer_context_count"] == 1
+    assert metrics["detail_layer_context_count"] == 1
+    assert metrics["used_summary_layer"] is True
+
+
 def test_no_answer_refusal_accuracy_is_true_for_refusal_answer():
     metrics = calculate_metrics(
         EvalMetricInputs(
@@ -149,6 +212,8 @@ def test_no_answer_refusal_accuracy_is_true_for_refusal_answer():
     )
 
     assert metrics["refusal_accuracy"] is True
+    assert metrics["refusal_detected"] is True
+    assert metrics["expected_refusal"] is True
 
 
 def test_no_answer_refusal_accuracy_is_false_for_forced_answer():
@@ -184,6 +249,35 @@ def test_citation_support_rate_counts_expected_source_citations():
     )
 
     assert metrics["citation_support_rate"] == 2 / 3
+
+
+def test_metrics_include_answer_verification_online_indicators():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="上海住宿标准为 500 元。",
+            references=[],
+            trace_data={
+                "answer_verification": {
+                    "evidence_coverage": 0.5,
+                    "supported_count": 1,
+                    "unsupported_count": 1,
+                    "insufficient_count": 2,
+                    "final_action": "refused",
+                    "retry": {"triggered": True},
+                }
+            },
+            expected_source_ids=[],
+            expected_keywords=[],
+        )
+    )
+
+    assert metrics["evidence_coverage"] == 0.5
+    assert metrics["evidence_supported_count"] == 1
+    assert metrics["evidence_unsupported_count"] == 1
+    assert metrics["evidence_insufficient_count"] == 2
+    assert metrics["hallucination_risk_count"] == 3
+    assert metrics["answer_verification_action"] == "refused"
+    assert metrics["answer_verification_retry"] is True
 
 
 def test_run_example_generates_result_and_trace(monkeypatch):
@@ -247,6 +341,278 @@ def test_run_example_generates_result_and_trace(monkeypatch):
     assert run.trace is not None
     assert run.metrics["expected_source_hit_rate"] == 1
     assert run.metrics["keyword_hit_rate"] == 1
+    assert run.metrics["ragas_enabled"] is False
+
+
+def test_strategy_snapshot_records_retrieval_controls():
+    service = react_api.ReactApiService()
+    settings = react_api.ChatSettings()
+    settings.retrieval.topK = 7
+    settings.retrieval.firstRoundMultiplier = 4
+    settings.retrieval.retrievalMode = "hybrid"
+    settings.retrieval.rerank = True
+    settings.retrieval.mmr = True
+
+    snapshot = service._strategy_snapshot(
+        settings,
+        strategy="hybrid_rrf+rerank+mmr",
+        experiment_tag="resume-exp",
+    )
+
+    retrieval = snapshot["retrieval_strategy"]
+    assert snapshot["strategy_id"] == "hybrid_rrf+rerank+mmr"
+    assert snapshot["experiment_tag"] == "resume-exp"
+    assert retrieval["retrieval_mode"] == "hybrid"
+    assert retrieval["enhancement"] == "none"
+    assert retrieval["topK"] == 7
+    assert retrieval["firstRoundMultiplier"] == 4
+    assert retrieval["rerank"] is True
+    assert retrieval["mmr"] is True
+    assert retrieval["rrf"] == {"enabled": True, "k": 60}
+    assert retrieval["query_rewrite"] == {"enabled": False, "implemented": True}
+    assert retrieval["hyde"] == {"enabled": False, "implemented": True}
+    assert retrieval["rag_fusion"] == {
+        "enabled": False,
+        "implemented": True,
+        "query_count": 0,
+    }
+
+
+def test_eval_variants_compare_normal_rewrite_hyde_and_fusion():
+    service = react_api.ReactApiService()
+    settings = react_api.ChatSettings()
+    settings.retrieval.retrievalMode = "hybrid"
+    settings.retrieval.enhancement = "hyde"
+
+    normal = service._settings_for_eval_variant(settings, "normal_query")
+    rewrite = service._settings_for_eval_variant(settings, "rewrite")
+    hyde = service._settings_for_eval_variant(settings, "hyde")
+    fusion = service._settings_for_eval_variant(settings, "fusion")
+
+    assert normal.retrieval.retrievalMode == "hybrid"
+    assert normal.retrieval.enhancement == "none"
+    assert rewrite.retrieval.enhancement == "rewrite"
+    assert hyde.retrieval.enhancement == "hyde"
+    assert fusion.retrieval.enhancement == "fusion"
+    assert fusion.retrieval.retrievalMode == "hybrid"
+
+
+def test_start_eval_dataset_creates_runs_for_each_strategy(monkeypatch):
+    _engine(monkeypatch)
+    service = react_api.ReactApiService()
+    monkeypatch.setattr(
+        service, "get_chat_settings", lambda user_id: react_api.ChatSettings()
+    )
+    dataset = service.create_eval_dataset(
+        react_api.RagEvalDatasetPayload(name="策略对比集"),
+        "alice",
+    )
+    first = service.create_eval_example(
+        dataset.id,
+        react_api.RagEvalExamplePayload(question="问题 A", tags=["exact_id"]),
+        "alice",
+    )
+    second = service.create_eval_example(
+        dataset.id,
+        react_api.RagEvalExamplePayload(question="问题 B", tags=["permission"]),
+        "alice",
+    )
+
+    runs = service.start_eval_dataset(
+        dataset.id,
+        "alice",
+        strategies=["vector", "hybrid_rrf"],
+        experiment_tag="batch-exp",
+    )
+
+    assert len(runs) == 4
+    assert {run.exampleId for run in runs} == {first.id, second.id}
+    assert {run.settingsSnapshot["strategy_id"] for run in runs} == {
+        "vector",
+        "hybrid_rrf",
+    }
+    assert {run.settingsSnapshot["experiment_tag"] for run in runs} == {"batch-exp"}
+
+
+def test_dataset_summary_reports_permission_leak_rate(monkeypatch):
+    _engine(monkeypatch)
+    service = react_api.ReactApiService()
+    dataset = service.create_eval_dataset(
+        react_api.RagEvalDatasetPayload(name="ACL 回归集"),
+        "alice",
+    )
+    leaked_run = react_api.eval_store.create_run(
+        dataset_id=dataset.id,
+        example_id=None,
+        owner_user_id="alice",
+        evaluator_user_id="bob",
+        question="leaked?",
+    )
+    clean_run = react_api.eval_store.create_run(
+        dataset_id=dataset.id,
+        example_id=None,
+        owner_user_id="alice",
+        evaluator_user_id="bob",
+        question="clean?",
+    )
+    failed_run = react_api.eval_store.create_run(
+        dataset_id=dataset.id,
+        example_id=None,
+        owner_user_id="alice",
+        evaluator_user_id="bob",
+        question="failed?",
+    )
+    react_api.eval_store.finish_run(
+        leaked_run.id,
+        status="completed",
+        answer="",
+        references=[],
+        metrics={"acl_leak_detected": True},
+    )
+    react_api.eval_store.finish_run(
+        clean_run.id,
+        status="completed",
+        answer="",
+        references=[],
+        metrics={"acl_leak_detected": False},
+    )
+    react_api.eval_store.finish_run(
+        failed_run.id,
+        status="failed",
+        answer="",
+        references=[],
+        metrics={"acl_leak_detected": True},
+    )
+
+    summary = service.list_eval_datasets("alice")[0]
+
+    assert summary.runCount == 3
+    assert summary.permissionLeakCount == 1
+    assert summary.permissionLeakTotal == 2
+    assert summary.permissionLeakRate == 0.5
+
+
+def test_ragas_contexts_extract_from_trace_chunks():
+    assert extract_ragas_contexts(
+        {
+            "context_chunks": [
+                {"text": "chunk from text"},
+                {"content": "chunk from content"},
+                {"metadata": {"page_content": "chunk from metadata"}},
+                {"text": "chunk from text"},
+            ],
+            "candidate_chunks_after_rerank": [{"text": "fallback chunk"}],
+        }
+    ) == [
+        "chunk from text",
+        "chunk from content",
+        "chunk from metadata",
+    ]
+
+    assert extract_ragas_contexts(
+        {
+            "context_chunks": [],
+            "candidate_chunks_after_rerank": [
+                {"page_content": "reranked page content"},
+                {"metadata": {"content": "reranked metadata content"}},
+            ],
+        }
+    ) == ["reranked page content", "reranked metadata content"]
+
+    assert extract_ragas_contexts(None) == []
+
+
+def test_run_example_adds_mocked_ragas_metrics(monkeypatch):
+    _engine(monkeypatch)
+    service = react_api.ReactApiService()
+    monkeypatch.setenv("KH_RAGAS_EVAL_ENABLED", "true")
+    monkeypatch.setattr(
+        service, "get_chat_settings", lambda user_id: react_api.ChatSettings()
+    )
+    monkeypatch.setattr(service, "_file_index", lambda: None)
+
+    observed = {}
+
+    def fake_calculate_ragas_metrics(question, answer, contexts, ground_truth=None):
+        observed["question"] = question
+        observed["answer"] = answer
+        observed["contexts"] = contexts
+        observed["ground_truth"] = ground_truth
+        return {
+            "ragas_enabled": True,
+            "faithfulness": 0.91,
+            "answer_relevancy": 0.82,
+            "context_precision": 0.73,
+            "context_recall": 0.64,
+        }
+
+    monkeypatch.setattr(
+        react_api.ragas_metrics,
+        "calculate_ragas_metrics",
+        fake_calculate_ragas_metrics,
+    )
+
+    def fake_run(payload, user_id, emit_token, **kwargs):
+        recorder = RagTraceRecorder(
+            conversation_id=payload.conversationId,
+            user_id=user_id,
+            question=payload.content,
+            selected_file_ids=payload.selectedFileIds,
+            retrieval_params={"topK": 10},
+            effective_principal={"principal": {"type": "user", "id": user_id}},
+        )
+        recorder.set_message(kwargs["message_id"])
+        recorder.record_context(
+            [
+                SimpleNamespace(
+                    doc_id="chunk-1",
+                    text="semantic support context",
+                    metadata={"file_id": "doc-1", "file_name": "policy.pdf"},
+                )
+            ]
+        )
+        trace_row = save_trace(recorder.finish("completed"))
+        return react_api.RagPipelineRunResult(
+            answerText="semantic answer",
+            formattedAnswer="semantic answer",
+            retrievalContent="",
+            references=[],
+            trace=service._trace_summary_to_api(trace_row),
+            traceData=trace_row.data,
+            messageId=kwargs["message_id"],
+        )
+
+    monkeypatch.setattr(service, "run_rag_once", fake_run)
+    dataset = service.create_eval_dataset(
+        react_api.RagEvalDatasetPayload(name="RAGAS 回归集"),
+        "alice",
+    )
+    example = service.create_eval_example(
+        dataset.id,
+        react_api.RagEvalExamplePayload(
+            question="语义指标是什么？",
+            expectedAnswer="semantic ground truth",
+            expectedSourceIds=["doc-1"],
+            expectedKeywords=["semantic"],
+            evaluatorUserId="bob",
+        ),
+        "alice",
+    )
+
+    run = service.run_eval_example(example.id, "alice")
+
+    assert run.status == "completed"
+    assert observed == {
+        "question": "语义指标是什么？",
+        "answer": "semantic answer",
+        "contexts": ["semantic support context"],
+        "ground_truth": "semantic ground truth",
+    }
+    assert run.metrics["ragas_enabled"] is True
+    assert run.metrics["ragas_faithfulness"] == 0.91
+    assert run.metrics["ragas_answer_relevancy"] == 0.82
+    assert run.metrics["ragas_context_precision"] == 0.73
+    assert run.metrics["ragas_context_recall"] == 0.64
 
 
 def test_evaluator_acl_detects_hidden_source_and_result_omits_hidden_text(monkeypatch):
@@ -286,6 +652,20 @@ def test_evaluator_acl_detects_hidden_source_and_result_omits_hidden_text(monkey
         index, Source(id="hidden", name="hidden.pdf", user="alice")
     )
 
+    allowed_alias_leak = react_api.eval_store.detect_acl_leak(
+        index=index,
+        trace_data={
+            "context_chunks": [
+                {
+                    "source_id": "owned",
+                    "source_name": "hidden.pdf",
+                    "metadata": {"file_id": "owned", "file_name": "hidden.pdf"},
+                    "text": "allowed text",
+                }
+            ]
+        },
+        evaluator_user_id="bob",
+    )
     leak = react_api.eval_store.detect_acl_leak(
         index=index,
         trace_data={
@@ -306,6 +686,7 @@ def test_evaluator_acl_detects_hidden_source_and_result_omits_hidden_text(monkey
         acl_leak_detected=leak,
     )
 
+    assert allowed_alias_leak is False
     assert leak is True
     assert metrics["acl_leak_detected"] is True
     assert "secret hidden text" not in str(
