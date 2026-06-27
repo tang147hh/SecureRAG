@@ -8,9 +8,10 @@ import { TracePanel } from "./TracePanel";
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  onOpenReferences?: (messageId: string) => void;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onOpenReferences }: MessageBubbleProps) {
   const [trace, setTrace] = useState<RagTraceDetail | null>();
   const [traceLoading, setTraceLoading] = useState(false);
   const [traceError, setTraceError] = useState<string>();
@@ -48,7 +49,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </small>
           {isLoading ? <em>streaming</em> : null}
         </div>
-        <div className="message-bubble">
+        <button
+          className={`message-bubble ${isAssistant ? "message-bubble--clickable" : ""}`}
+          type="button"
+          onClick={() => {
+            if (isAssistant && !isLoading) onOpenReferences?.(message.id);
+          }}
+          disabled={!isAssistant || isLoading}
+          aria-label={isAssistant ? "显示这条回答的知识引用" : undefined}
+        >
           {message.content ? (
             <MarkdownText text={message.content} />
           ) : (
@@ -58,14 +67,21 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               <span />
             </div>
           )}
-        </div>
+        </button>
         {isAssistant && message.citations?.length ? (
           <details className="message-citations">
             <summary>
-              <span>
+              <button
+                className="message-citations__open"
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onOpenReferences?.(message.id);
+                }}
+              >
                 <FileText size={15} />
                 引用依据
-              </span>
+              </button>
               <small>{message.citations.length} 个证据块</small>
             </summary>
             <div className="message-citations__list">

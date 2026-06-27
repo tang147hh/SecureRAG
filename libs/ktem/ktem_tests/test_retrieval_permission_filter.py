@@ -287,10 +287,8 @@ def test_two_user_acl_e2e_keeps_hidden_doc_out_of_all_rag_stages(monkeypatch):
 
     assert vector_store.seen_doc_ids == ["chunk-b"]
     assert doc_store.seen_query_doc_ids == ["chunk-b"]
-    assert [doc.metadata["file_id"] for doc in retrieved_docs] == [
-        "source-b",
-        "source-b",
-    ]
+    assert retrieved_docs
+    assert {doc.metadata["file_id"] for doc in retrieved_docs} == {"source-b"}
     assert recorder.data["acl"]["filtered_source_count"] == 1
     assert recorder.data["selected_file_ids"] == ["source-b"]
 

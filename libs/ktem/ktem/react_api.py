@@ -908,6 +908,14 @@ class ReactApiService:
                 references = self._references_from_retrieval(
                     [retrieval_history[index]] if index < len(retrieval_history) else []
                 )
+                trace = get_trace_by_message(
+                    f"{conversation_id}-{index}-assistant",
+                    user_id,
+                )
+                if trace is not None:
+                    graph_reference = self._graph_reference_from_trace(trace.data or {})
+                    if graph_reference is not None:
+                        references = [graph_reference, *references]
                 message_citations = [
                     citation
                     for reference in references
@@ -945,6 +953,29 @@ class ReactApiService:
             return None
         _get_conversation_or_404(trace.conversation_id, user_id)
         return self._trace_detail_to_api(trace)
+
+    def get_message_references(
+        self, message_id: str, user_id: str
+    ) -> list[ReferenceDocument]:
+        trace = get_trace_by_message(message_id, user_id)
+        if trace is None:
+            return []
+        conversation = _get_conversation_or_404(trace.conversation_id, user_id)
+        references: list[ReferenceDocument] = []
+        data_source = conversation.data_source or {}
+        retrieval_history = data_source.get("retrieval_messages", [])
+        if (
+            trace.turn_index is not None
+            and isinstance(retrieval_history, list)
+            and trace.turn_index < len(retrieval_history)
+        ):
+            references = self._references_from_retrieval(
+                [retrieval_history[trace.turn_index]]
+            )
+        graph_reference = self._graph_reference_from_trace(trace.data or {})
+        if graph_reference is not None:
+            references = [graph_reference, *references]
+        return references
 
     def _option_values(self, values: list[Any] | tuple[Any, ...]) -> list[SelectOption]:
         output: list[SelectOption] = []
@@ -2800,6 +2831,11 @@ async def get_trace_run(trace_id: str, request: Request):
 @router.get("/messages/{message_id}/trace", response_model=RagTraceDetail | None)
 async def get_assistant_message_trace(message_id: str, request: Request):
     return service.get_message_trace(message_id, _require_user_id(request))
+
+
+@router.get("/messages/{message_id}/references", response_model=list[ReferenceDocument])
+async def get_assistant_message_references(message_id: str, request: Request):
+    return service.get_message_references(message_id, _require_user_id(request))
 
 
 @router.post("/chat/send", response_model=SendMessageResult)

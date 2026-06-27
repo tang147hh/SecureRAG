@@ -2170,6 +2170,7 @@ button {
 
 .message-bubble {
   min-width: 0;
+  width: 100%;
   overflow-wrap: anywhere;
   border: 1px solid var(--border-soft);
   border-radius: 1rem;
@@ -2177,6 +2178,31 @@ button {
   background: rgba(15, 23, 42, 0.76);
   color: var(--text-secondary);
   line-height: 1.7;
+  text-align: left;
+}
+
+button.message-bubble {
+  font: inherit;
+}
+
+button.message-bubble:disabled {
+  cursor: default;
+}
+
+.message-bubble--clickable {
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.message-bubble--clickable:hover,
+.message-bubble--clickable:focus-visible {
+  border-color: var(--border-active);
+  background: rgba(30, 41, 59, 0.88);
+}
+
+.message-bubble--clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .message-row--user .message-bubble {
@@ -2243,6 +2269,23 @@ button {
   align-items: center;
   gap: 0.42rem;
   font-weight: 760;
+}
+
+.message-citations__open {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: inherit;
+  background: transparent;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.message-citations__open:hover {
+  color: var(--text-main);
 }
 
 .message-citations summary small {
@@ -2832,6 +2875,232 @@ button {
 .graph-reference {
   display: grid;
   gap: 0.8rem;
+}
+
+.graph-map {
+  display: grid;
+  gap: 0.6rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.8rem;
+  padding: 0.7rem;
+  background: rgba(2, 6, 23, 0.3);
+}
+
+.graph-map__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: var(--text-secondary);
+}
+
+.graph-map__head span {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
+.graph-map__head small {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--text-faint);
+  font-size: 0.74rem;
+}
+
+.graph-map__expand {
+  width: 2rem;
+  aspect-ratio: 1;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.6rem;
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-muted);
+  background: rgba(15, 23, 42, 0.66);
+  cursor: pointer;
+}
+
+.graph-map__expand:hover {
+  color: var(--text-main);
+  border-color: var(--border-active);
+  background: var(--accent-soft);
+}
+
+.graph-map__preview {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  border-radius: 0.78rem;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.graph-map__preview:focus-visible,
+.graph-map__expand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.graph-map__canvas {
+  width: 100%;
+  aspect-ratio: 720 / 430;
+  min-height: 15rem;
+  display: block;
+}
+
+.graph-map__canvas--large {
+  min-height: 0;
+  height: min(72dvh, 42rem);
+}
+
+.graph-map__backdrop {
+  fill: rgba(15, 23, 42, 0.58);
+  stroke: rgba(148, 163, 184, 0.16);
+}
+
+.graph-map__edge line {
+  stroke: rgba(148, 163, 184, 0.58);
+  stroke-width: 1.7;
+  marker-end: url("#graph-arrow");
+}
+
+.graph-map__line--large {
+  marker-end: url("#graph-arrow-large");
+}
+
+.graph-map__edge text {
+  fill: #cbd5e1;
+  paint-order: stroke;
+  stroke: rgba(2, 6, 23, 0.95);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  font-size: 0.74rem;
+  font-weight: 750;
+  text-anchor: middle;
+}
+
+.graph-map marker path {
+  fill: rgba(148, 163, 184, 0.76);
+}
+
+.graph-map__node circle {
+  fill: #334155;
+  stroke: rgba(226, 232, 240, 0.66);
+  stroke-width: 1.8;
+}
+
+.graph-map__node text {
+  fill: #f8fafc;
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+
+.graph-map__node--id circle {
+  fill: #1d4ed8;
+  stroke: rgba(191, 219, 254, 0.8);
+}
+
+.graph-map__node--amount circle {
+  fill: #047857;
+  stroke: rgba(167, 243, 208, 0.82);
+}
+
+.graph-map__node--status circle {
+  fill: #b45309;
+  stroke: rgba(253, 230, 138, 0.8);
+}
+
+.graph-map__node--reason circle {
+  fill: #be123c;
+  stroke: rgba(254, 205, 211, 0.8);
+}
+
+.graph-map__paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.graph-map__paths span {
+  max-width: 100%;
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 999px;
+  padding: 0.24rem 0.5rem;
+  color: #99f6e4;
+  background: rgba(13, 148, 136, 0.12);
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+}
+
+.graph-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(2, 6, 23, 0.78);
+  cursor: zoom-out;
+}
+
+.graph-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(86rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.8rem;
+  border: 1px solid var(--border-medium);
+  border-radius: 1rem;
+  padding: clamp(0.8rem, 1.4vw, 1.1rem);
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.42);
+}
+
+.graph-modal__head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.graph-modal__head > div {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.graph-modal__head strong {
+  color: var(--text-main);
+  font-size: 1rem;
+}
+
+.graph-modal__head small {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.graph-modal__canvas {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 0.85rem;
+  display: grid;
+  place-items: center;
 }
 
 .graph-reference__section {

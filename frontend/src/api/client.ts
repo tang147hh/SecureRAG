@@ -124,6 +124,9 @@ export const apiClient = {
   getMessageTrace: (messageId: string) =>
     request<RagTraceDetail | null>(`/messages/${encodeURIComponent(messageId)}/trace`),
 
+  getMessageReferences: (messageId: string) =>
+    request<ReferenceDocument[]>(`/messages/${encodeURIComponent(messageId)}/references`),
+
   sendMessage: (payload: SendMessagePayload) =>
     request<SendMessageResult>("/chat/send", {
       method: "POST",

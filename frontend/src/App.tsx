@@ -36,6 +36,9 @@ const createAssistantPlaceholder = (conversationId: string): ChatMessage => ({
   status: "loading",
 });
 
+const lastAssistantMessage = (messages: ChatMessage[]) =>
+  [...messages].reverse().find((message) => message.role === "assistant");
+
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>();
@@ -106,8 +109,28 @@ function App() {
     let mounted = true;
     apiClient
       .listMessages(activeConversationId)
-      .then((nextMessages) => {
-        if (mounted) setMessages(nextMessages);
+      .then(async (nextMessages) => {
+        if (!mounted) return;
+        setMessages(nextMessages);
+        const assistantMessage = lastAssistantMessage(nextMessages);
+        if (!assistantMessage) {
+          const defaultReferences = await apiClient.listDefaultReferences();
+          if (!mounted) return;
+          setReferences(defaultReferences);
+          setActiveDocumentId(defaultReferences[0]?.id);
+          return;
+        }
+        const messageReferences = await apiClient.getMessageReferences(assistantMessage.id);
+        if (!mounted) return;
+        if (messageReferences.length) {
+          setReferences(messageReferences);
+          setActiveDocumentId(messageReferences[0]?.id);
+        } else {
+          const defaultReferences = await apiClient.listDefaultReferences();
+          if (!mounted) return;
+          setReferences(defaultReferences);
+          setActiveDocumentId(defaultReferences[0]?.id);
+        }
       })
       .catch((error: unknown) => {
         if (!mounted) return;
@@ -126,6 +149,21 @@ function App() {
       mounted = false;
     };
   }, [activeConversationId]);
+
+  const handleOpenMessageReferences = async (messageId: string) => {
+    try {
+      const messageReferences = await apiClient.getMessageReferences(messageId);
+      if (!messageReferences.length) {
+        window.alert("该回答没有可恢复的知识引用。");
+        return;
+      }
+      setReferences(messageReferences);
+      setActiveDocumentId(messageReferences[0]?.id);
+      setReferenceOpen(true);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "知识引用加载失败。");
+    }
+  };
 
   const refreshConversations = async () => {
     const nextConversations = await apiClient.listConversations();
@@ -402,6 +440,7 @@ function App() {
             onSend={handleSend}
             onUploadFiles={handleUploadFiles}
             onOpenReferences={() => setReferenceOpen(true)}
+            onOpenMessageReferences={handleOpenMessageReferences}
             onSelectConversation={setActiveConversationId}
             onCreateConversation={handleCreateConversation}
             onDeleteConversation={handleDeleteConversation}

@@ -15,6 +15,7 @@ interface ChatWorkspaceProps {
   onSend: (content: string) => void;
   onUploadFiles: (files: File[]) => void;
   onOpenReferences: () => void;
+  onOpenMessageReferences: (messageId: string) => void;
   onOpenFiles: () => void;
   onSelectConversation: (conversationId: string) => void;
   onCreateConversation: () => void;
@@ -32,6 +33,7 @@ export function ChatWorkspace({
   onSend,
   onUploadFiles,
   onOpenReferences,
+  onOpenMessageReferences,
   onOpenFiles,
   onSelectConversation,
   onCreateConversation,
@@ -76,7 +78,10 @@ export function ChatWorkspace({
         </div>
       </div>
       <div className="chat-scroll" ref={scrollRef}>
-        <MessageList messages={messages} />
+        <MessageList
+          messages={messages}
+          onOpenMessageReferences={onOpenMessageReferences}
+        />
       </div>
       <ChatComposer
         disabled={isSending || !conversation}
