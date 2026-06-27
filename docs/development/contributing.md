@@ -52,12 +52,9 @@
   kotaemon use cases. Some of these components are: LLM, vector store,
   document store, retriever... For a detailed list and description of these
   components, please refer to the [API Reference](../reference/Summary.md) section.
-- List of utilities: `kotaemon` provides utilities and tools that are
-  usually needed in client project. For example, it provides a prompt
-  engineering UI for AI developers in a project to quickly create a prompt
-  engineering tool for DMs and QALs. It also provides a command to quickly spin
-  up a project code base. For a full list and description of these utilities,
-  please refer to the [Utilities](utilities.md) section.
+- List of utilities: `kotaemon` provides utilities and tools that are usually
+  needed in client projects. For example, it provides component inspection,
+  documentation generation, and project scaffolding helpers.
 
 ```mermaid
 mindmap

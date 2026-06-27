@@ -8,17 +8,16 @@ from starlette.responses import RedirectResponse
 from theflow.settings import settings as flowsettings
 
 KH_APP_DATA_DIR = getattr(flowsettings, "KH_APP_DATA_DIR", ".")
-GRADIO_TEMP_DIR = os.getenv("GRADIO_TEMP_DIR", None)
-# override GRADIO_TEMP_DIR if it's not set
-if GRADIO_TEMP_DIR is None:
-    GRADIO_TEMP_DIR = os.path.join(KH_APP_DATA_DIR, "gradio_tmp")
-    os.environ["GRADIO_TEMP_DIR"] = GRADIO_TEMP_DIR
+APP_TEMP_DIR = os.getenv("APP_TEMP_DIR", None)
+if APP_TEMP_DIR is None:
+    APP_TEMP_DIR = os.path.join(KH_APP_DATA_DIR, "tmp")
+    os.environ["APP_TEMP_DIR"] = APP_TEMP_DIR
 
 
-from ktem.main import App  # noqa
 from ktem.react_api import register_react_api  # noqa
+from ktem.react_runtime import ReactRuntime  # noqa
 
-runtime = App()
+runtime = ReactRuntime()
 runtime.make()
 
 app = FastAPI()
@@ -46,6 +45,6 @@ async def favicon():
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.getenv("GRADIO_SERVER_NAME", "0.0.0.0")
-    port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "7860"))
     uvicorn.run(app, host=host, port=port)

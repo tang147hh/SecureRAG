@@ -128,7 +128,7 @@ class SoSimple(BaseComponent):
                 "name": "Human-friendly name",
                 "value": "Default value",
                 "choices": [("Human-friendly Choice 1", "choice1-id"), ("HFC 2", "choice2-id")], # optional
-                "component": "Which Gradio UI component to render, can be: text, number, checkbox, dropdown, radio, checkboxgroup"
+                "component": "Input control hint, such as text, number, checkbox, dropdown, radio, or checkboxgroup"
             },
             "setting_2": {
                 # follow the same rule as above

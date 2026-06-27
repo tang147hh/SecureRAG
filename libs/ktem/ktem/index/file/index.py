@@ -253,7 +253,7 @@ class FileIndex(BaseIndex):
             - `FILE_INDEX_SELECTOR_UI` in self.config
             - `FILE_INDEX_{id}_SELECTOR_UI` in the flowsettings
             - `FILE_INDEX_SELECTOR_UI` in the flowsettings
-            - The default .ui.FileSelector
+            - None. ReactRuntime injects a headless selector.
         """
         if "FILE_INDEX_SELECTOR_UI" in self.config:
             self._selector_ui_cls = import_dotted_string(
@@ -274,9 +274,7 @@ class FileIndex(BaseIndex):
             )
             return
 
-        from .ui import FileSelector
-
-        self._selector_ui_cls = FileSelector
+        self._selector_ui_cls = None
 
     def _setup_file_index_ui_cls(self):
         """Retrieve the Index UI class
@@ -288,7 +286,7 @@ class FileIndex(BaseIndex):
             - `FILE_INDEX_UI` in self.config
             - `FILE_INDEX_{id}_UI` in the flowsettings
             - `FILE_INDEX_UI` in the flowsettings
-            - The default .ui.FileIndexPage
+            - None. The React frontend manages files through REST APIs.
         """
         if "FILE_INDEX_UI" in self.config:
             self._index_ui_cls = import_dotted_string(
@@ -309,9 +307,7 @@ class FileIndex(BaseIndex):
             )
             return
 
-        from .ui import FileIndexPage
-
-        self._index_ui_cls = FileIndexPage
+        self._index_ui_cls = None
 
     def on_create(self):
         """Create the index for the first time
@@ -366,11 +362,15 @@ class FileIndex(BaseIndex):
         self._setup_file_selector_ui_cls()
 
     def get_selector_component_ui(self):
+        if self._selector_ui_cls is None:
+            return self._selector_ui
         if self._selector_ui is None:
             self._selector_ui = self._selector_ui_cls(self._app, self)
         return self._selector_ui
 
     def get_index_page_ui(self):
+        if self._index_ui_cls is None:
+            return self._index_ui
         if self._index_ui is None:
             self._index_ui = self._index_ui_cls(self._app, self)
         return self._index_ui

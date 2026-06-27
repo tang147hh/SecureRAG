@@ -13,10 +13,10 @@ dirty_template = "{tag}"
 tag_filter = "v?\\d+(\\.\\d+)*.*"
 
 [project]
-name = "kotaemon-app"
+name = "securerag"
 dynamic = ["version"]
 requires-python = ">= 3.10"
-description = "Kotaemon App"
+description = "Secure React-based RAG application with file permissions, tracing, and evaluation"
 dependencies = [
     "kotaemon[all]",
     "ktem"
@@ -63,9 +63,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://cinnamon.github.io/kotaemon/"
-Repository = "https://github.com/Cinnamon/kotaemon/"
-Documentation = "https://cinnamon.github.io/kotaemon/"
+Homepage = "https://github.com/local/SecureRAG"
+Repository = "https://github.com/local/SecureRAG"
+Documentation = "https://github.com/local/SecureRAG#readme"
 
 [tool.codespell]
 skip = "*.js,*.css,*.map"

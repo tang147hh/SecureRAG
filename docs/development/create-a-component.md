@@ -66,6 +66,6 @@ compose larger reusable components!
 By defining a component as above, we formally encapsulate all the necessary
 information inside a single class. This introduces several benefits:
 
-1. Allow tools like promptui to inspect the inner working of a component in
-   order to automatically generate the promptui.
+1. Allow runtime code to inspect the inner working of a component and compose
+   reusable RAG pipelines.
 2. Allow visualizing a pipeline for debugging purpose.

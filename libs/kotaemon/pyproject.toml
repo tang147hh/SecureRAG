@@ -28,7 +28,6 @@ dependencies = [
     "cookiecutter>=2.6.0,<2.7",
     "fast_langdetect",
     "fastapi<=0.112.1",
-    "gradio>=4.31.0,<5",
     "html2text==2024.2.26",
     "langchain<2",
     "langchain-community<1",

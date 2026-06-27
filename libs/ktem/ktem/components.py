@@ -81,7 +81,7 @@ class ModelPool:
         return self._models.get(key, default)
 
     def settings(self) -> dict:
-        """Present model pools option for gradio"""
+        """Present model pool options for runtime settings."""
         return {
             "label": self._category,
             "choices": list(self._models.keys()),

@@ -45,7 +45,7 @@ from ktem.trace import (
     save_trace,
     set_active_recorder,
 )
-from ktem.pages.chat import (
+from ktem.react_defaults import (
     DEFAULT_PROMPT_TEMPLATE_NAME,
     DEFAULT_PROMPT_TEMPLATES,
     DEFAULT_PROMPT_TEMPLATE_TEXT,
@@ -90,17 +90,6 @@ def _to_iso(value: Any) -> str:
 def _user_id_from_request(request: Request) -> str | None:
     if not getattr(flowsettings, "KH_FEATURE_USER_MANAGEMENT", False):
         return "default"
-
-    user = None
-    try:
-        import gradiologin as grlogin
-
-        user = grlogin.get_user(request)
-    except Exception:
-        user = None
-
-    if user:
-        return user.get("sub") or user.get("email")
 
     try:
         session = request.session
@@ -486,7 +475,7 @@ class ReactApiService:
         if self.app_runtime is None or not hasattr(self.app_runtime, "chat_page"):
             raise HTTPException(
                 status_code=503,
-                detail="React 聊天接口需要通过 register_react_api(app, gradio_app) 注入应用运行态。",
+                detail="React 聊天接口需要通过 register_react_api(app, runtime) 注入应用运行态。",
             )
         return self.app_runtime.chat_page
 

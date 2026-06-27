@@ -12,13 +12,12 @@ from starlette.responses import RedirectResponse
 from theflow.settings import settings as flowsettings
 
 KH_APP_DATA_DIR = getattr(flowsettings, "KH_APP_DATA_DIR", ".")
-GRADIO_TEMP_DIR = os.getenv("GRADIO_TEMP_DIR", None)
+APP_TEMP_DIR = os.getenv("APP_TEMP_DIR", None)
 AUTHENTICATION_METHOD = config("AUTHENTICATION_METHOD", "GOOGLE")
 
-# override GRADIO_TEMP_DIR if it's not set
-if GRADIO_TEMP_DIR is None:
-    GRADIO_TEMP_DIR = os.path.join(KH_APP_DATA_DIR, "gradio_tmp")
-    os.environ["GRADIO_TEMP_DIR"] = GRADIO_TEMP_DIR
+if APP_TEMP_DIR is None:
+    APP_TEMP_DIR = os.path.join(KH_APP_DATA_DIR, "tmp")
+    os.environ["APP_TEMP_DIR"] = APP_TEMP_DIR
 
 # for authentication with Google
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
@@ -71,10 +70,10 @@ def add_session_middleware(app):
     app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
     return oauth
 
-from ktem.main import App  # noqa
 from ktem.react_api import register_react_api  # noqa
+from ktem.react_runtime import ReactRuntime  # noqa
 
-runtime = App()
+runtime = ReactRuntime()
 runtime.make()
 
 app = FastAPI()

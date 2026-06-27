@@ -2,37 +2,13 @@ import os
 from typing import List
 
 from kotaemon.base import BaseComponent, Document, LLMInterface, Node, Param, lazy
-from kotaemon.contribs.promptui.logs import ResultLog
 from kotaemon.embeddings import LCAzureOpenAIEmbeddings
 from kotaemon.indices import VectorIndexing, VectorRetrieval
 from kotaemon.llms import LCAzureChatOpenAI
 from kotaemon.storages import ChromaVectorStore, SimpleFileDocumentStore
 
 
-class QAResultLog(ResultLog):
-    @staticmethod
-    def _get_prompt(obj):
-        return obj["prompt"]
-
-
 class QuestionAnsweringPipeline(BaseComponent):
-
-    _promptui_resultlog = QAResultLog
-    _promptui_outputs: list = [
-        {
-            "step": ".prompt",
-            "getter": "_get_prompt",
-            "component": "text",
-            "params": {"label": "Constructed prompt to LLM"},
-        },
-        {
-            "step": ".",
-            "getter": "_get_output",
-            "component": "text",
-            "params": {"label": "Answer"},
-        },
-    ]
-
     retrieval_top_k: int = 1
     llm: LCAzureChatOpenAI = LCAzureChatOpenAI.withx(
         azure_endpoint="https://bleh-dummy-2.openai.azure.com/",

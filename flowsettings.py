@@ -14,7 +14,7 @@ this_file = getframeinfo(cur_frame).filename
 this_dir = Path(this_file).parent
 
 # change this if your app use a different name
-KH_PACKAGE_NAME = "kotaemon_app"
+KH_PACKAGE_NAME = "securerag"
 
 KH_APP_VERSION = config("KH_APP_VERSION", None)
 if not KH_APP_VERSION:
@@ -25,7 +25,6 @@ if not KH_APP_VERSION:
     except Exception:
         KH_APP_VERSION = "local"
 
-KH_GRADIO_SHARE = config("KH_GRADIO_SHARE", default=False, cast=bool)
 KH_ENABLE_FIRST_SETUP = config("KH_ENABLE_FIRST_SETUP", default=True, cast=bool)
 KH_DEMO_MODE = config("KH_DEMO_MODE", default=False, cast=bool)
 KH_OLLAMA_URL = config("KH_OLLAMA_URL", default="http://localhost:11434/v1/")
