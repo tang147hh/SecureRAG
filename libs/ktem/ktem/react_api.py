@@ -28,6 +28,7 @@ from ktem.db.models import Settings as DbSettings
 from ktem.db.models import User
 from ktem.evaluation import ragas_metrics
 from ktem.evaluation import EvalMetricInputs, calculate_metrics, store as eval_store
+from ktem.index.file.graph.product import ProductGraphIndexingMixin, collection_graph_id
 from ktem.permissions import (
     can_read_source,
     filter_source_ids,
@@ -70,6 +71,7 @@ RAG_EVAL_STRATEGY_LABELS = {
     "hybrid_rrf": "Hybrid + RRF",
     "hybrid_rrf+rerank": "Hybrid + RRF + Rerank",
     "hybrid_rrf+rerank+mmr": "Hybrid + RRF + Rerank + MMR",
+    "graph": "GraphRAG Fusion",
 }
 
 
@@ -325,6 +327,9 @@ class RetrievalSettings(BaseModel):
     llmRerank: bool = False
     mmr: bool = False
     prioritizeTable: bool = False
+    graphEnabled: bool = False
+    graphProvider: Literal["lightrag", "nano"] = "lightrag"
+    graphSearchType: Literal["local", "global", "hybrid"] = "local"
 
 
 class SelectOption(BaseModel):
@@ -631,6 +636,11 @@ class ReactApiService:
             next_settings.retrieval.enhancement = "fusion"
             next_settings.retrieval.retrievalMode = "hybrid"
             return next_settings
+        if variant == "graph":
+            next_settings.retrieval.graphEnabled = True
+            next_settings.retrieval.graphProvider = "lightrag"
+            next_settings.retrieval.graphSearchType = "local"
+            return next_settings
         if variant == "current":
             return next_settings
         if variant == "vector":
@@ -706,6 +716,12 @@ class ReactApiService:
                     "llm_rerank": bool(retrieval.get("llmRerank")),
                     "mmr": bool(retrieval.get("mmr")),
                     "prioritize_table": bool(retrieval.get("prioritizeTable")),
+                    "graph_rag": {
+                        "enabled": bool(retrieval.get("graphEnabled")),
+                        "provider": retrieval.get("graphProvider") or "lightrag",
+                        "search_type": retrieval.get("graphSearchType") or "local",
+                        "implemented": True,
+                    },
                     "rrf": {
                         "enabled": retrieval_mode == "hybrid",
                         "k": 60 if retrieval_mode == "hybrid" else None,
@@ -982,6 +998,9 @@ class ReactApiService:
                 llmRerank=bool(stored.get("use_llm_reranking", False)),
                 mmr=bool(stored.get("use_mmr", False)),
                 prioritizeTable=bool(stored.get("prioritize_table", False)),
+                graphEnabled=bool(stored.get("graph_enabled", False)),
+                graphProvider=stored.get("graph_provider") or "lightrag",
+                graphSearchType=stored.get("graph_search_type") or "local",
             ),
             options=options,
         )
@@ -1025,6 +1044,15 @@ class ReactApiService:
                 SelectOption(label="HyDE", value="hyde"),
                 SelectOption(label="RAG-Fusion", value="fusion"),
             ],
+            "graphProvider": [
+                SelectOption(label="LightRAG", value="lightrag"),
+                SelectOption(label="NanoGraphRAG", value="nano"),
+            ],
+            "graphSearchType": [
+                SelectOption(label="Local", value="local"),
+                SelectOption(label="Global", value="global"),
+                SelectOption(label="Hybrid", value="hybrid"),
+            ],
             "promptTemplate": [
                 SelectOption(label=name, value=name) for name in templates.keys()
             ],
@@ -1064,6 +1092,9 @@ class ReactApiService:
             settings.retrieval.mmr,
             settings.retrieval.prioritizeTable,
             template_name,
+            settings.retrieval.graphEnabled,
+            settings.retrieval.graphProvider,
+            settings.retrieval.graphSearchType,
         )
         return self.get_chat_settings(user_id)
 
@@ -1496,10 +1527,163 @@ class ReactApiService:
                 document.citations.append(citation)
         return list(documents_by_title.values())
 
+    def _graph_reference_from_trace(
+        self, trace_data: dict[str, Any]
+    ) -> ReferenceDocument | None:
+        graph = trace_data.get("graph_rag") or {}
+        if not graph.get("enabled"):
+            return None
+
+        entities = list(graph.get("entities") or [])
+        relationships = list(graph.get("relationships") or [])
+        paths = list(graph.get("paths") or [])
+        fragments = list(graph.get("answer_fragments") or [])
+        if not any([entities, relationships, paths, fragments]):
+            return None
+
+        def label(record: dict[str, Any], *keys: str) -> str:
+            for key in keys:
+                value = record.get(key)
+                if value not in (None, ""):
+                    return str(value)
+            return ""
+
+        citations: list[Citation] = []
+        for index, entity in enumerate(entities[:6]):
+            if not isinstance(entity, dict):
+                continue
+            name = label(entity, "entity", "entity_name", "name") or "实体"
+            description = label(entity, "description", "type") or name
+            citations.append(
+                Citation(
+                    id=f"graph-entity-{index}",
+                    documentId="graph-rag-reference",
+                    title=f"实体：{name}",
+                    excerpt=description,
+                    score=1.0,
+                    highlight=name,
+                )
+            )
+
+        for index, rel in enumerate(relationships[:8]):
+            if not isinstance(rel, dict):
+                continue
+            source = label(rel, "source", "src_id", "source_id")
+            target = label(rel, "target", "tgt_id", "target_id")
+            description = label(rel, "description", "keywords")
+            title = f"关系：{source} -> {target}" if source or target else "关系"
+            citations.append(
+                Citation(
+                    id=f"graph-relation-{index}",
+                    documentId="graph-rag-reference",
+                    title=title,
+                    excerpt=description or title,
+                    score=1.0,
+                    highlight=source or target or "关系",
+                )
+            )
+
+        for index, path in enumerate(paths[:5]):
+            if not isinstance(path, dict):
+                continue
+            nodes = path.get("nodes") or []
+            path_text = " -> ".join(str(node) for node in nodes) if isinstance(nodes, list) else str(nodes)
+            description = label(path, "description") or path_text
+            citations.append(
+                Citation(
+                    id=f"graph-path-{index}",
+                    documentId="graph-rag-reference",
+                    title=f"路径：{path_text or index + 1}",
+                    excerpt=description,
+                    score=1.0,
+                    highlight=path_text,
+                )
+            )
+
+        for index, fragment in enumerate(fragments[:3]):
+            text = str(fragment or "").strip()
+            if not text:
+                continue
+            citations.append(
+                Citation(
+                    id=f"graph-fragment-{index}",
+                    documentId="graph-rag-reference",
+                    title=f"图谱答案片段 {index + 1}",
+                    excerpt=text,
+                    score=1.0,
+                    highlight=text[:80],
+                )
+            )
+
+        provider = graph.get("provider") or "GraphRAG"
+        search_type = graph.get("search_type") or "local"
+        summary = (
+            f"{provider} / {search_type}: "
+            f"{len(entities)} entities, {len(relationships)} relationships, "
+            f"{len(paths)} paths"
+        )
+        return ReferenceDocument(
+            id="graph-rag-reference",
+            title="GraphRAG 图谱证据",
+            source="GraphRAG",
+            summary=summary,
+            updatedAt=_now(),
+            citations=citations,
+        )
+
+    def _fallback_answer_from_references(
+        self,
+        question: str,
+        references: list[ReferenceDocument],
+        *,
+        error: Exception | None = None,
+    ) -> str:
+        graph_reference = next(
+            (reference for reference in references if reference.id == "graph-rag-reference"),
+            None,
+        )
+        relation_lines: list[str] = []
+        entity_lines: list[str] = []
+        if graph_reference:
+            for citation in graph_reference.citations:
+                if citation.id.startswith("graph-relation"):
+                    text = str(citation.excerpt or citation.title or "").strip()
+                    if text and text not in relation_lines:
+                        relation_lines.append(text)
+                elif citation.id.startswith("graph-entity"):
+                    text = str(citation.title or "").replace("实体：", "").strip()
+                    if text and text not in entity_lines:
+                        entity_lines.append(text)
+
+        answer_parts = [
+            "模型回答生成失败，但已根据检索到的证据整理出以下结论："
+        ]
+        if relation_lines:
+            answer_parts.extend(f"- {line}" for line in relation_lines[:6])
+        elif references:
+            for reference in references[:2]:
+                for citation in reference.citations[:3]:
+                    text = str(citation.excerpt or citation.title or "").strip()
+                    if text:
+                        answer_parts.append(f"- {text[:220]}")
+        else:
+            answer_parts.append("- 本次没有可用的知识引用证据。")
+
+        if entity_lines:
+            answer_parts.append(f"涉及实体：{'、'.join(entity_lines[:8])}。")
+        if error:
+            answer_parts.append(
+                f"生成失败原因：{type(error).__name__}，请检查模型额度或模型配置后重试。"
+            )
+        return "\n".join(answer_parts)
+
     def _selected_components(self, user_id: str, selected_ids: list[str] | None = None):
         components = []
         selected_ids = selected_ids or []
+        file_index = self._file_index()
         for index in self.app_runtime.index_manager.indices:
+            if index is not file_index:
+                continue
             if index.selector is None:
                 continue
             if isinstance(index.selector, int):
@@ -1732,6 +1916,10 @@ class ReactApiService:
         docs = pipeline.loader.load_data(file_path, extra_info=extra_info)
         for _ in pipeline.handle_docs(docs, file_id, file_name):
             pass
+        if isinstance(indexing_pipeline, ProductGraphIndexingMixin):
+            indexing_pipeline.collection_graph_id = collection_graph_id(index.id)
+            for _ in indexing_pipeline.index_graph_for_docs([file_id], docs):
+                pass
         pipeline.finish(
             file_id,
             file_path,
@@ -1904,6 +2092,9 @@ class ReactApiService:
             None,
             user_id,
             *selected_components,
+            session_graph_enabled=payload.settings.retrieval.graphEnabled,
+            session_graph_provider=payload.settings.retrieval.graphProvider,
+            session_graph_search_type=payload.settings.retrieval.graphSearchType,
         )
 
         queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -1917,6 +2108,9 @@ class ReactApiService:
             "llmRerank": payload.settings.retrieval.llmRerank,
             "mmr": payload.settings.retrieval.mmr,
             "prioritizeTable": payload.settings.retrieval.prioritizeTable,
+            "graphEnabled": payload.settings.retrieval.graphEnabled,
+            "graphProvider": payload.settings.retrieval.graphProvider,
+            "graphSearchType": payload.settings.retrieval.graphSearchType,
             "promptTemplate": payload.settings.promptTemplate,
             "promptTemplateText": prompt_text,
         }
@@ -1963,8 +2157,33 @@ class ReactApiService:
                     retrieval_content += str(response.content or "")
         except Exception as exc:
             trace_recorder.record_error("pipeline", exc)
-            save_trace(trace_recorder.finish("failed"))
-            raise
+            trace_data = trace_recorder.finish("failed")
+            references = self._references_from_retrieval([retrieval_content])
+            graph_reference = self._graph_reference_from_trace(trace_data)
+            if graph_reference is not None:
+                references = [graph_reference, *references]
+            citations = references[0].citations if references else []
+            trace_row = save_trace(trace_data)
+            trace_summary = self._trace_summary_to_api(trace_row)
+            answer_text = self._fallback_answer_from_references(
+                payload.content,
+                references,
+                error=exc,
+            )
+            formatted_answer = self.chat_page.format_answer_with_refs(
+                answer_text, "", answer_text
+            )
+            return RagPipelineRunResult(
+                answerText=answer_text,
+                formattedAnswer=formatted_answer,
+                retrievalContent=retrieval_content,
+                references=references,
+                citations=citations,
+                trace=trace_summary,
+                traceData=trace_data,
+                messageId=message_id,
+                turnIndex=turn_index,
+            )
         finally:
             set_active_recorder(None)
 
@@ -1976,9 +2195,12 @@ class ReactApiService:
                 flowsettings, "KH_CHAT_EMPTY_MSG_PLACEHOLDER", "(Sorry, I don't know)"
             )
 
-        references = self._references_from_retrieval([retrieval_content])
-        citations = references[0].citations if references else []
         trace_data = trace_recorder.finish("completed")
+        references = self._references_from_retrieval([retrieval_content])
+        graph_reference = self._graph_reference_from_trace(trace_data)
+        if graph_reference is not None:
+            references = [graph_reference, *references]
+        citations = references[0].citations if references else []
         trace_row = save_trace(trace_data)
         trace_summary = self._trace_summary_to_api(trace_row)
         formatted_answer = self.chat_page.format_answer_with_refs(

@@ -189,6 +189,17 @@ class RagTraceRecorder:
                 "queries": [],
                 "raw_response": None,
             },
+            "graph_rag": {
+                "enabled": False,
+                "provider": None,
+                "search_type": None,
+                "graph_ids": [],
+                "entities": [],
+                "relationships": [],
+                "paths": [],
+                "sources": [],
+                "answer_fragments": [],
+            },
             "rerank_enabled": False,
             "vector_candidate_chunks": [],
             "text_candidate_chunks": [],
@@ -418,6 +429,33 @@ class RagTraceRecorder:
             "queries": fusion_queries or [],
             "raw_response": fusion_raw_response,
         }
+
+    def record_graph_retrieval(self, payload: dict[str, Any]) -> None:
+        graph = self.data.setdefault(
+            "graph_rag",
+            {
+                "enabled": False,
+                "provider": None,
+                "search_type": None,
+                "graph_ids": [],
+                "entities": [],
+                "relationships": [],
+                "paths": [],
+                "sources": [],
+                "answer_fragments": [],
+            },
+        )
+        graph["enabled"] = bool(payload.get("enabled", True))
+        graph["provider"] = payload.get("provider") or graph.get("provider")
+        graph["search_type"] = payload.get("search_type") or graph.get("search_type")
+        graph_id = payload.get("graph_id")
+        if graph_id and graph_id not in graph.setdefault("graph_ids", []):
+            graph["graph_ids"].append(graph_id)
+        for key in ("entities", "relationships", "paths", "sources", "answer_fragments"):
+            existing = graph.setdefault(key, [])
+            for item in payload.get(key) or []:
+                if item not in existing:
+                    existing.append(item)
 
     def record_rerank(
         self,

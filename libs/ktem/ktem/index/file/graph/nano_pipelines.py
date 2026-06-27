@@ -25,6 +25,7 @@ from kotaemon.base.schema import AIMessage, HumanMessage, SystemMessage
 
 from ..pipelines import BaseFileIndexRetriever
 from .pipelines import GraphRAGIndexingPipeline
+from .product import graph_trace_payload
 from .visualize import create_knowledge_graph, visualize_graph
 
 try:
@@ -424,15 +425,17 @@ class NanoGraphRAGRetrieverPipeline(BaseFileIndexRetriever):
         file_id = self.file_ids[0]
 
         # retrieve the graph_id from the index
-        with Session(engine) as session:
-            graph_id = (
-                session.query(self.Index.target_id)
-                .filter(self.Index.source_id == file_id)
-                .filter(self.Index.relation_type == "graph")
-                .first()
-            )
-            graph_id = graph_id[0] if graph_id else None
-            assert graph_id, f"GraphRAG index not found for file_id: {file_id}"
+        graph_id = getattr(self, "_product_graph_id", None)
+        if not graph_id:
+            with Session(engine) as session:
+                graph_id = (
+                    session.query(self.Index.target_id)
+                    .filter(self.Index.source_id == file_id)
+                    .filter(self.Index.relation_type == "graph")
+                    .first()
+                )
+                graph_id = graph_id[0] if graph_id else None
+                assert graph_id, f"GraphRAG index not found for file_id: {file_id}"
 
         _, input_path = prepare_graph_index_path(graph_id)
         input_path.mkdir(parents=True, exist_ok=True)
@@ -446,7 +449,7 @@ class NanoGraphRAGRetrieverPipeline(BaseFileIndexRetriever):
         print("search_type", self.search_type)
         query_params = QueryParam(mode=self.search_type, only_need_context=True)
 
-        return graphrag_func, query_params
+        return graphrag_func, query_params, graph_id
 
     def _to_document(self, header: str, context_text: str) -> RetrievedDocument:
         return RetrievedDocument(
@@ -506,7 +509,14 @@ class NanoGraphRAGRetrieverPipeline(BaseFileIndexRetriever):
         if not self.file_ids:
             return []
 
-        graphrag_func, query_params = self._build_graph_search()
+        graphrag_func, query_params, graph_id = self._build_graph_search()
+        trace_recorder = None
+        try:
+            from ktem.trace import get_active_recorder
+
+            trace_recorder = get_active_recorder()
+        except Exception:
+            trace_recorder = None
 
         # only local mode support graph visualization
         if query_params.mode == "local":
@@ -515,6 +525,17 @@ class NanoGraphRAGRetrieverPipeline(BaseFileIndexRetriever):
                     graphrag_func, text, query_params
                 )
             )
+            if trace_recorder:
+                trace_recorder.record_graph_retrieval(
+                    graph_trace_payload(
+                        provider="nano",
+                        search_type=query_params.mode,
+                        graph_id=graph_id,
+                        entities=entities,
+                        relationships=relationships,
+                        sources=sources,
+                    )
+                )
 
             documents = self.format_context_records(
                 entities, relationships, reports, sources
@@ -533,6 +554,15 @@ class NanoGraphRAGRetrieverPipeline(BaseFileIndexRetriever):
             ]
         else:
             context = graphrag_func.query(text, query_params)
+            if trace_recorder:
+                trace_recorder.record_graph_retrieval(
+                    graph_trace_payload(
+                        provider="nano",
+                        search_type=query_params.mode,
+                        graph_id=graph_id,
+                        answer_fragment=context,
+                    )
+                )
 
             documents = [
                 RetrievedDocument(

@@ -199,6 +199,54 @@ def test_metrics_report_summary_and_detail_layer_usage():
     assert metrics["used_summary_layer"] is True
 
 
+def test_metrics_report_multihop_graph_readiness():
+    metrics = calculate_metrics(
+        EvalMetricInputs(
+            answer="张三属于销售团队，销售团队适用报销制度A。",
+            references=[],
+            trace_data={
+                "context_chunks": [
+                    {
+                        "source_id": "policy",
+                        "source_name": "expense.md",
+                        "type": "graph",
+                        "retrieval_layer": "graph_layer",
+                    }
+                ],
+                "graph_rag": {
+                    "enabled": True,
+                    "entities": [
+                        {"entity": "张三"},
+                        {"entity": "销售团队"},
+                        {"entity": "报销制度A"},
+                    ],
+                    "relationships": [
+                        {"source": "张三", "target": "销售团队"},
+                        {"source": "销售团队", "target": "报销制度A"},
+                    ],
+                    "paths": [
+                        {"nodes": ["张三", "销售团队", "报销制度A"]},
+                    ],
+                    "answer_fragments": [
+                        "张三通过销售团队关联到报销制度A。",
+                    ],
+                },
+            },
+            expected_source_ids=["policy"],
+            expected_keywords=["销售团队", "报销制度A"],
+            tags=["multi_hop"],
+        )
+    )
+
+    assert metrics["graph_layer_context_count"] == 1
+    assert metrics["graph_rag_enabled"] is True
+    assert metrics["graph_entity_count"] == 3
+    assert metrics["graph_relationship_count"] == 2
+    assert metrics["graph_path_count"] == 1
+    assert metrics["graph_answer_fragment_count"] == 1
+    assert metrics["multi_hop_graph_ready"] is True
+
+
 def test_no_answer_refusal_accuracy_is_true_for_refusal_answer():
     metrics = calculate_metrics(
         EvalMetricInputs(
@@ -375,6 +423,21 @@ def test_strategy_snapshot_records_retrieval_controls():
         "enabled": False,
         "implemented": True,
         "query_count": 0,
+    }
+
+
+def test_graph_eval_variant_enables_lightrag_settings():
+    service = react_api.ReactApiService()
+    settings = service._settings_for_eval_variant(react_api.ChatSettings(), "graph")
+    snapshot = service._strategy_snapshot(settings, strategy="graph")
+
+    assert settings.retrieval.graphEnabled is True
+    assert settings.retrieval.graphProvider == "lightrag"
+    assert snapshot["retrieval_strategy"]["graph_rag"] == {
+        "enabled": True,
+        "provider": "lightrag",
+        "search_type": "local",
+        "implemented": True,
     }
 
 

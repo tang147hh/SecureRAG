@@ -26,6 +26,7 @@ from kotaemon.base.schema import AIMessage, HumanMessage, SystemMessage
 from ..pipelines import BaseFileIndexRetriever
 from .pipelines import GraphRAGIndexingPipeline
 from .visualize import create_knowledge_graph, visualize_graph
+from .product import graph_trace_payload
 
 try:
     from lightrag import LightRAG, QueryParam
@@ -380,11 +381,21 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
 
         for doc_id in range(0, len(all_docs), self.index_batch_size):
             cur_docs = all_docs[doc_id : doc_id + self.index_batch_size]
-            combined_doc = "\n".join(cur_docs)
-
-            # Use insert for incremental updates
-            graphrag_func.insert(combined_doc)
-            process_doc_count += len(cur_docs)
+            for cur_doc in cur_docs:
+                try:
+                    # Insert chunks independently so a single LLM extraction failure
+                    # does not mark the entire source document as failed.
+                    graphrag_func.insert(cur_doc)
+                except Exception as exc:
+                    yield Document(
+                        channel="debug",
+                        text=(
+                            "[GraphRAG] Skipped one chunk during indexing: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                    )
+                finally:
+                    process_doc_count += 1
             yield Document(
                 channel="debug",
                 text=(
@@ -433,15 +444,17 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
         file_id = self.file_ids[0]
 
         # retrieve the graph_id from the index
-        with Session(engine) as session:
-            graph_id = (
-                session.query(self.Index.target_id)
-                .filter(self.Index.source_id == file_id)
-                .filter(self.Index.relation_type == "graph")
-                .first()
-            )
-            graph_id = graph_id[0] if graph_id else None
-            assert graph_id, f"GraphRAG index not found for file_id: {file_id}"
+        graph_id = getattr(self, "_product_graph_id", None)
+        if not graph_id:
+            with Session(engine) as session:
+                graph_id = (
+                    session.query(self.Index.target_id)
+                    .filter(self.Index.source_id == file_id)
+                    .filter(self.Index.relation_type == "graph")
+                    .first()
+                )
+                graph_id = graph_id[0] if graph_id else None
+                assert graph_id, f"GraphRAG index not found for file_id: {file_id}"
 
         _, input_path = prepare_graph_index_path(graph_id)
         input_path.mkdir(parents=True, exist_ok=True)
@@ -455,7 +468,7 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
         print("search_type", self.search_type)
         query_params = QueryParam(mode=self.search_type, only_need_context=True)
 
-        return graphrag_func, query_params
+        return graphrag_func, query_params, graph_id
 
     def _to_document(self, header: str, context_text: str) -> RetrievedDocument:
         return RetrievedDocument(
@@ -507,13 +520,31 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
         if not self.file_ids:
             return []
 
-        graphrag_func, query_params = self._build_graph_search()
+        graphrag_func, query_params, graph_id = self._build_graph_search()
+        trace_recorder = None
+        try:
+            from ktem.trace import get_active_recorder
+
+            trace_recorder = get_active_recorder()
+        except Exception:
+            trace_recorder = None
 
         # only local mode support graph visualization
         if query_params.mode == "local":
             entities, relationships, sources = asyncio.run(
                 lightrag_build_local_query_context(graphrag_func, text, query_params)
             )
+            if trace_recorder:
+                trace_recorder.record_graph_retrieval(
+                    graph_trace_payload(
+                        provider="lightrag",
+                        search_type=query_params.mode,
+                        graph_id=graph_id,
+                        entities=entities,
+                        relationships=relationships,
+                        sources=sources,
+                    )
+                )
             documents = self.format_context_records(entities, relationships, sources)
             plot = self.plot_graph(relationships)
             documents += [
@@ -528,6 +559,15 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
             ]
         else:
             context = graphrag_func.query(text, query_params)
+            if trace_recorder:
+                trace_recorder.record_graph_retrieval(
+                    graph_trace_payload(
+                        provider="lightrag",
+                        search_type=query_params.mode,
+                        graph_id=graph_id,
+                        answer_fragment=context,
+                    )
+                )
 
             # account for missing ``` for closing code block
             context += "\n```"

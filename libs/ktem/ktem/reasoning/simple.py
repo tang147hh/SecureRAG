@@ -347,6 +347,12 @@ class FullQAPipeline(BaseReasoning):
 
             for doc in retriever_docs_text:
                 if doc.doc_id not in doc_ids:
+                    metadata = getattr(doc, "metadata", {}) or {}
+                    if metadata.get("retrieval_channel") == "graph":
+                        retrieval_metadata = getattr(doc, "retrieval_metadata", {}) or {}
+                        retrieval_metadata["retrieval_channel"] = "graph"
+                        retrieval_metadata["retrieval_layer"] = "graph_layer"
+                        doc.retrieval_metadata = retrieval_metadata
                     docs.append(doc)
                     doc_ids.append(doc.doc_id)
 

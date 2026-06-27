@@ -1,4 +1,4 @@
-import { Activity, CheckCircle2, Clock, PenLine, ShieldCheck } from "lucide-react";
+import { Activity, CheckCircle2, Clock, Network, PenLine, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import type { RagTraceChunk, RagTraceDetail } from "../api/types";
 
@@ -26,6 +26,7 @@ export function TracePanel({ trace, loading = false, error }: TracePanelProps) {
   const durations = data.durations_ms ?? {};
   const tokens = data.tokens ?? {};
   const verification = data.answer_verification;
+  const graphRag = data.graph_rag;
   const fusionQueries = data.rag_fusion?.queries?.length
     ? data.rag_fusion.queries
     : ((enhancement.fusion_queries as string[] | undefined) ?? []);
@@ -90,6 +91,34 @@ export function TracePanel({ trace, loading = false, error }: TracePanelProps) {
           }}
         />
       </TraceSection>
+
+      {graphRag?.enabled ? (
+        <TraceSection icon={<Network size={14} />} title="GraphRAG">
+          <KeyValueGrid
+            value={{
+              provider: graphRag.provider,
+              search_type: graphRag.search_type,
+              graph_ids: graphRag.graph_ids?.join(", "),
+              entity_count: graphRag.entities?.length ?? 0,
+              relationship_count: graphRag.relationships?.length ?? 0,
+              path_count: graphRag.paths?.length ?? 0,
+            }}
+          />
+          <GraphRecordList title="实体" items={graphRag.entities} />
+          <GraphRecordList title="关系" items={graphRag.relationships} />
+          <GraphRecordList title="路径" items={graphRag.paths} />
+          {graphRag.answer_fragments?.length ? (
+            <div className="trace-chunks">
+              {graphRag.answer_fragments.slice(0, 3).map((fragment, index) => (
+                <article className="trace-chunk" key={`${fragment}-${index}`}>
+                  <strong>图谱答案片段 {index + 1}</strong>
+                  <p>{fragment}</p>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </TraceSection>
+      ) : null}
 
       <TraceSection icon={<ShieldCheck size={14} />} title="权限过滤">
         <KeyValueGrid
@@ -161,6 +190,39 @@ export function TracePanel({ trace, loading = false, error }: TracePanelProps) {
       <TraceList title="最终 Context" items={data.context_chunks} />
       <TraceList title="最终引用" items={data.citation_chunks} />
     </div>
+  );
+}
+
+function GraphRecordList({
+  title,
+  items,
+}: {
+  title: string;
+  items?: Array<Record<string, unknown>>;
+}) {
+  if (!items?.length) return null;
+  return (
+    <section className="trace-subsection">
+      <h4>{title}</h4>
+      <div className="trace-chunks">
+        {items.slice(0, 8).map((item, index) => (
+          <article className="trace-chunk" key={`${title}-${index}`}>
+            <strong>
+              {String(
+                item.entity ??
+                  item.entity_name ??
+                  item.name ??
+                  item.source ??
+                  item.nodes ??
+                  title,
+              )}
+              {item.target ? ` -> ${String(item.target)}` : ""}
+            </strong>
+            <p>{String(item.description ?? item.content ?? JSON.stringify(item))}</p>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 

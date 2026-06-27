@@ -12,6 +12,7 @@ from decouple import config
 from ktem.app import BasePage
 from ktem.components import reasonings
 from ktem.db.models import Conversation, engine
+from ktem.index.file import FileIndex
 from ktem.index.file.ui import File
 from ktem.reasoning.prompt_optimization.mindmap import MINDMAP_HTML_EXPORT_TEMPLATE
 from ktem.reasoning.prompt_optimization.suggest_conversation_name import (
@@ -726,6 +727,9 @@ class ChatPage(BasePage):
         use_mmr,
         prioritize_table,
         prompt_template_select,
+        graph_enabled=False,
+        graph_provider="lightrag",
+        graph_search_type="local",
     ):
         data = self._read_chat_runtime_settings()
         user_key = str(user_id or "default")
@@ -744,6 +748,9 @@ class ChatPage(BasePage):
             "use_mmr": bool(use_mmr),
             "prioritize_table": bool(prioritize_table),
             "prompt_template_select": prompt_template_select or DEFAULT_PROMPT_TEMPLATE_NAME,
+            "graph_enabled": bool(graph_enabled),
+            "graph_provider": graph_provider or "lightrag",
+            "graph_search_type": graph_search_type or "local",
         }
         self._write_chat_runtime_settings(data)
 
@@ -1874,6 +1881,9 @@ class ChatPage(BasePage):
         command_state: str | None,
         user_id: int,
         *selecteds,
+        session_graph_enabled: bool = False,
+        session_graph_provider: str = "lightrag",
+        session_graph_search_type: str = "local",
     ):
         """Create the pipeline from settings
 
@@ -1948,6 +1958,8 @@ class ChatPage(BasePage):
             session_first_round_multiplier = 10
 
         for index in self._app.index_manager.indices:
+            if index.__class__ is not FileIndex:
+                continue
             prefix = f"index.options.{index.id}."
             settings[prefix + "num_retrieval"] = session_top_k
             settings[prefix + "first_round_top_k_mult"] = (
@@ -1958,6 +1970,9 @@ class ChatPage(BasePage):
             settings[prefix + "use_llm_reranking"] = bool(session_use_llm_reranking)
             settings[prefix + "mmr"] = bool(session_use_mmr)
             settings[prefix + "prioritize_table"] = bool(session_prioritize_table)
+            settings[prefix + "graph_enabled"] = bool(session_graph_enabled)
+            settings[prefix + "graph_provider"] = session_graph_provider or "lightrag"
+            settings[prefix + "graph_search_type"] = session_graph_search_type or "local"
 
         # get retrievers
         retrievers = []
@@ -1971,6 +1986,8 @@ class ChatPage(BasePage):
             retrievers.append(web_search)
         else:
             for index in self._app.index_manager.indices:
+                if index.__class__ is not FileIndex:
+                    continue
                 if isinstance(index.selector, int):
                     index_selected = selecteds[index.selector]
                 elif isinstance(index.selector, tuple):

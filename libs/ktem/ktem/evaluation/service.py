@@ -89,11 +89,16 @@ def _ranked_chunks(trace_data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _layer_counts(chunks: list[dict[str, Any]]) -> dict[str, int]:
-    counts = {"summary_layer": 0, "detail_layer": 0}
+    counts = {"summary_layer": 0, "detail_layer": 0, "graph_layer": 0}
     for chunk in chunks:
         layer = str(chunk.get("retrieval_layer") or "")
         if not layer:
-            layer = "summary_layer" if chunk.get("type") == "summary" else "detail_layer"
+            if chunk.get("type") == "summary":
+                layer = "summary_layer"
+            elif chunk.get("type") == "graph":
+                layer = "graph_layer"
+            else:
+                layer = "detail_layer"
         if layer in counts:
             counts[layer] += 1
     return counts
@@ -182,6 +187,7 @@ def calculate_metrics(
     errors = trace_data.get("errors") or []
     verification = trace_data.get("answer_verification") or {}
     verification_retry = verification.get("retry") or {}
+    graph_rag = trace_data.get("graph_rag") or {}
     error = inputs.error
     if not error and errors:
         error = str((errors[-1] or {}).get("message") or "")
@@ -221,7 +227,18 @@ def calculate_metrics(
         ),
         "summary_layer_context_count": retrieval_layer_counts["summary_layer"],
         "detail_layer_context_count": retrieval_layer_counts["detail_layer"],
+        "graph_layer_context_count": retrieval_layer_counts["graph_layer"],
         "used_summary_layer": retrieval_layer_counts["summary_layer"] > 0,
+        "graph_rag_enabled": bool(graph_rag.get("enabled")),
+        "graph_entity_count": len(graph_rag.get("entities") or []),
+        "graph_relationship_count": len(graph_rag.get("relationships") or []),
+        "graph_path_count": len(graph_rag.get("paths") or []),
+        "graph_answer_fragment_count": len(graph_rag.get("answer_fragments") or []),
+        "multi_hop_graph_ready": (
+            bool(graph_rag.get("enabled"))
+            and len(graph_rag.get("paths") or []) > 0
+            and len(graph_rag.get("relationships") or []) > 0
+        ),
         "evidence_coverage": verification.get("evidence_coverage"),
         "evidence_supported_count": verification.get("supported_count"),
         "evidence_unsupported_count": verification.get("unsupported_count"),

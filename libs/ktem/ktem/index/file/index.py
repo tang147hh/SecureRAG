@@ -188,6 +188,12 @@ class FileIndex(BaseIndex):
             )
             return
 
+        if self.config.get("GRAPH_RAG_ENABLED"):
+            from .graph.product import ProductGraphIndexingPipeline
+
+            self._indexing_pipeline_cls = ProductGraphIndexingPipeline
+            return
+
         if hasattr(flowsettings, "FILE_INDEX_PIPELINE"):
             self._indexing_pipeline_cls = import_dotted_string(
                 getattr(flowsettings, "FILE_INDEX_PIPELINE"), safe=False
@@ -347,6 +353,12 @@ class FileIndex(BaseIndex):
 
     def on_start(self):
         """Setup the classes and hooks"""
+        if "GRAPH_RAG_ENABLED" not in self.config:
+            self.config["GRAPH_RAG_ENABLED"] = True
+        if "GRAPH_RAG_PROVIDER" not in self.config:
+            self.config["GRAPH_RAG_PROVIDER"] = getattr(
+                flowsettings, "GRAPH_RAG_PROVIDER", "lightrag"
+            )
         self._setup_resources()
         self._setup_indexing_cls()
         self._setup_retriever_cls()
@@ -484,5 +496,25 @@ class FileIndex(BaseIndex):
             obj.private = self.config.get("private", False)
             obj.user_id = user_id
             retrievers.append(obj)
+
+        if bool(stripped_settings.get("graph_enabled", False)) and selected_ids:
+            from .graph.product import ProductGraphRetriever, graph_provider_name
+
+            retrievers.append(
+                ProductGraphRetriever(
+                    index_id=self.id,
+                    Source=self._resources["Source"],
+                    Index=self._resources["Index"],
+                    VS=self._vs,
+                    DS=self._docstore,
+                    FSPath=self._fs_path,
+                    file_ids=selected_ids,
+                    user_id=str(user_id),
+                    PermissionService=self._resources["PermissionService"],
+                    private=self.config.get("private", False),
+                    provider=graph_provider_name(self.config),
+                    search_type=stripped_settings.get("graph_search_type", "local"),
+                )
+            )
 
         return retrievers

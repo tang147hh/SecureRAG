@@ -288,6 +288,35 @@ export function ChatSettingsPanel({
           checked={settings.retrieval.prioritizeTable}
           onChange={(prioritizeTable) => patchRetrieval({ prioritizeTable })}
         />
+        <SwitchField
+          label="GraphRAG"
+          description="融合实体、关系和多跳路径证据"
+          checked={settings.retrieval.graphEnabled}
+          onChange={(graphEnabled) => patchRetrieval({ graphEnabled })}
+        />
+        {settings.retrieval.graphEnabled ? (
+          <>
+            <SelectField
+              label="图谱引擎"
+              value={settings.retrieval.graphProvider ?? "lightrag"}
+              onChange={(graphProvider) => patchRetrieval({ graphProvider })}
+              options={optionOr("graphProvider", [
+                { label: "LightRAG", value: "lightrag" },
+                { label: "NanoGraphRAG", value: "nano" },
+              ])}
+            />
+            <SelectField
+              label="图谱检索"
+              value={settings.retrieval.graphSearchType ?? "local"}
+              onChange={(graphSearchType) => patchRetrieval({ graphSearchType })}
+              options={optionOr("graphSearchType", [
+                { label: "Local", value: "local" },
+                { label: "Global", value: "global" },
+                { label: "Hybrid", value: "hybrid" },
+              ])}
+            />
+          </>
+        ) : null}
       </section>
     </div>
   );

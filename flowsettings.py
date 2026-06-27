@@ -177,10 +177,13 @@ SETTINGS_REASONING = {
     },
 }
 
-USE_GLOBAL_GRAPHRAG = config("USE_GLOBAL_GRAPHRAG", default=False, cast=bool)
+USE_GLOBAL_GRAPHRAG = config("USE_GLOBAL_GRAPHRAG", default=True, cast=bool)
 USE_NANO_GRAPHRAG = config("USE_NANO_GRAPHRAG", default=False, cast=bool)
-USE_LIGHTRAG = config("USE_LIGHTRAG", default=False, cast=bool)
+USE_LIGHTRAG = config("USE_LIGHTRAG", default=True, cast=bool)
 USE_MS_GRAPHRAG = config("USE_MS_GRAPHRAG", default=False, cast=bool)
+KH_EXPOSE_GRAPHRAG_INDEX_TYPES = config(
+    "KH_EXPOSE_GRAPHRAG_INDEX_TYPES", default=False, cast=bool
+)
 
 GRAPHRAG_INDEX_TYPES = []
 
@@ -193,7 +196,7 @@ if USE_LIGHTRAG:
 
 KH_INDEX_TYPES = [
     "ktem.index.file.FileIndex",
-    *GRAPHRAG_INDEX_TYPES,
+    *(GRAPHRAG_INDEX_TYPES if KH_EXPOSE_GRAPHRAG_INDEX_TYPES else []),
 ]
 
 GRAPHRAG_INDICES = [
@@ -209,7 +212,7 @@ GRAPHRAG_INDICES = [
         },
         "index_type": graph_type,
     }
-    for graph_type in GRAPHRAG_INDEX_TYPES
+    for graph_type in (GRAPHRAG_INDEX_TYPES if KH_EXPOSE_GRAPHRAG_INDEX_TYPES else [])
 ]
 
 KH_INDICES = [
@@ -221,6 +224,8 @@ KH_INDICES = [
                 ".pptx, .csv, .html, .mhtml, .txt, .md, .zip"
             ),
             "private": True,
+            "GRAPH_RAG_ENABLED": True,
+            "GRAPH_RAG_PROVIDER": config("GRAPH_RAG_PROVIDER", default="lightrag"),
         },
         "index_type": "ktem.index.file.FileIndex",
     },

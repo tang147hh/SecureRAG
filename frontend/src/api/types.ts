@@ -70,6 +70,17 @@ export interface RagTraceDetail extends RagTraceSummary {
       queries?: string[];
       raw_response?: string | null;
     };
+    graph_rag?: {
+      enabled?: boolean;
+      provider?: string | null;
+      search_type?: string | null;
+      graph_ids?: string[];
+      entities?: Array<Record<string, unknown>>;
+      relationships?: Array<Record<string, unknown>>;
+      paths?: Array<Record<string, unknown>>;
+      sources?: Array<Record<string, unknown>>;
+      answer_fragments?: string[];
+    };
     selected_file_ids?: string[];
     effective_principal?: Record<string, unknown>;
     retrieval_params?: Record<string, unknown>;
@@ -238,6 +249,9 @@ export interface RetrievalSettings {
   llmRerank: boolean;
   mmr: boolean;
   prioritizeTable: boolean;
+  graphEnabled: boolean;
+  graphProvider: "lightrag" | "nano" | string;
+  graphSearchType: "local" | "global" | "hybrid" | string;
 }
 
 export interface SelectOption {

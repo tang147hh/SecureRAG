@@ -1,5 +1,5 @@
-import { FileText, Layers3, X } from "lucide-react";
-import type { ReferenceDocument } from "../api/types";
+import { FileText, Layers3, Network, X } from "lucide-react";
+import type { Citation, ReferenceDocument } from "../api/types";
 import { CitationCard } from "./CitationCard";
 import { IconButton } from "./IconButton";
 
@@ -21,6 +21,7 @@ export function ReferencePanel({
   const activeDocument =
     references.find((document) => document.id === activeDocumentId) ?? references[0];
   const allCitations = activeDocument?.citations ?? references.flatMap((document) => document.citations);
+  const isGraphReference = activeDocument?.source === "GraphRAG";
 
   return (
     <aside
@@ -74,12 +75,71 @@ export function ReferencePanel({
             <Layers3 size={16} />
           </div>
           <div className="citation-list">
-            {allCitations.map((citation, index) => (
-              <CitationCard key={citation.id} citation={citation} index={index} />
-            ))}
+            {isGraphReference ? (
+              <GraphEvidenceList citations={allCitations} />
+            ) : (
+              allCitations.map((citation, index) => (
+                <CitationCard key={citation.id} citation={citation} index={index} />
+              ))
+            )}
           </div>
         </section>
       </div>
     </aside>
+  );
+}
+
+function GraphEvidenceList({ citations }: { citations: Citation[] }) {
+  const entities = citations.filter((citation) => citation.id.startsWith("graph-entity"));
+  const relationships = citations.filter((citation) =>
+    citation.id.startsWith("graph-relation"),
+  );
+  const paths = citations.filter((citation) => citation.id.startsWith("graph-path"));
+  const fragments = citations.filter((citation) =>
+    citation.id.startsWith("graph-fragment"),
+  );
+
+  return (
+    <div className="graph-reference">
+      <GraphEvidenceSection title="实体" items={entities} />
+      <GraphEvidenceSection title="关系" items={relationships} />
+      <GraphEvidenceSection title="路径" items={paths} emphasize />
+      <GraphEvidenceSection title="答案片段" items={fragments} />
+      {!citations.length ? (
+        <p className="graph-reference__empty">暂无图谱证据。</p>
+      ) : null}
+    </div>
+  );
+}
+
+function GraphEvidenceSection({
+  title,
+  items,
+  emphasize = false,
+}: {
+  title: string;
+  items: Citation[];
+  emphasize?: boolean;
+}) {
+  if (!items.length) return null;
+  return (
+    <section className="graph-reference__section">
+      <div className="graph-reference__title">
+        <Network size={14} />
+        <span>{title}</span>
+        <small>{items.length}</small>
+      </div>
+      <div className="graph-reference__items">
+        {items.map((item) => (
+          <article
+            className={`graph-reference__item ${emphasize ? "graph-reference__item--path" : ""}`}
+            key={item.id}
+          >
+            <strong>{item.title.replace(`${title}：`, "")}</strong>
+            <p>{item.excerpt}</p>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }

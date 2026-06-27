@@ -2829,6 +2829,67 @@ button {
   font-size: 0.74rem;
 }
 
+.graph-reference {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.graph-reference__section {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.graph-reference__title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+}
+
+.graph-reference__title span {
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.graph-reference__title small {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 0.74rem;
+}
+
+.graph-reference__items {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.graph-reference__item {
+  border: 1px solid var(--border-soft);
+  border-radius: 0.72rem;
+  padding: 0.68rem;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.graph-reference__item--path {
+  border-color: rgba(45, 212, 191, 0.42);
+  background: rgba(13, 148, 136, 0.12);
+}
+
+.graph-reference__item strong {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.graph-reference__item p,
+.graph-reference__empty {
+  margin: 0.4rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .diagnostics-panel dl {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

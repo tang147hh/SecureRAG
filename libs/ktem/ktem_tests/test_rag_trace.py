@@ -174,6 +174,58 @@ def test_trace_records_retrieval_params_and_durations(monkeypatch):
     assert get_trace_by_message("conv-0-assistant", "alice").trace_id == row.trace_id
 
 
+def test_trace_records_graph_entities_relationships_paths_and_answer_fragments():
+    recorder = RagTraceRecorder(
+        conversation_id="conv",
+        user_id="alice",
+        question="张三的审批链路关联哪条报销制度？",
+        selected_file_ids=["policy"],
+        retrieval_params={"graphEnabled": True},
+        effective_principal={"principal": {"type": "user", "id": "alice"}},
+    )
+
+    recorder.record_graph_retrieval(
+        {
+            "enabled": True,
+            "provider": "lightrag",
+            "search_type": "local",
+            "graph_id": "graph-1",
+            "entities": [
+                {"entity": "张三", "description": "销售员工"},
+                {"entity": "报销制度A", "description": "差旅规则"},
+            ],
+            "relationships": [
+                {
+                    "source": "张三",
+                    "target": "销售团队",
+                    "description": "属于",
+                },
+                {
+                    "source": "销售团队",
+                    "target": "报销制度A",
+                    "description": "适用",
+                },
+            ],
+            "paths": [
+                {
+                    "nodes": ["张三", "销售团队", "报销制度A"],
+                    "description": "身份到制度的多跳路径",
+                }
+            ],
+            "answer_fragments": ["张三属于销售团队，销售团队适用报销制度A。"],
+        }
+    )
+
+    graph = recorder.data["graph_rag"]
+    assert graph["enabled"] is True
+    assert graph["provider"] == "lightrag"
+    assert graph["graph_ids"] == ["graph-1"]
+    assert len(graph["entities"]) == 2
+    assert len(graph["relationships"]) == 2
+    assert graph["paths"][0]["nodes"] == ["张三", "销售团队", "报销制度A"]
+    assert "销售团队" in graph["answer_fragments"][0]
+
+
 def test_answer_support_checker_outputs_three_statuses():
     docs = [
         _doc(
