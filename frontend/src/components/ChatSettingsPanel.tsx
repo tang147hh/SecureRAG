@@ -1,6 +1,14 @@
 import { ChangeEvent, useRef } from "react";
-import { Database, FileUp, Loader2, Plus, SlidersHorizontal, Sparkles } from "lucide-react";
+import {
+  Database,
+  FileUp,
+  Loader2,
+  Plus,
+  SlidersHorizontal,
+  Sparkles,
+} from "lucide-react";
 import type { ChatSettings } from "../api/types";
+import { graphServiceConfig, patchGraphServiceConfig } from "../api/settings";
 import { SelectField } from "./SelectField";
 import { SwitchField } from "./SwitchField";
 
@@ -21,10 +29,13 @@ export function ChatSettingsPanel({
   const patch = (partial: Partial<ChatSettings>) => onChange({ ...settings, ...partial });
   const patchRetrieval = (partial: Partial<ChatSettings["retrieval"]>) =>
     patch({ retrieval: { ...settings.retrieval, ...partial } });
+  const patchGraph = (partial: Parameters<typeof patchGraphServiceConfig>[1]) =>
+    onChange(patchGraphServiceConfig(settings, partial));
   const options = settings.options ?? {};
   const optionOr = (key: string, defaultOptions: { label: string; value: string }[]) =>
     options[key]?.length ? options[key] : defaultOptions;
   const retrievalEnhancement = settings.retrieval.enhancement ?? "none";
+  const graphConfig = graphServiceConfig(settings);
   const retrievalEnhancementOptions = optionOr("retrievalEnhancement", [
     { label: "None", value: "none" },
     { label: "Query Rewrite", value: "rewrite" },
@@ -148,7 +159,7 @@ export function ChatSettingsPanel({
           options={optionOr("reasoningMethod", [{ label: settings.reasoningMethod, value: settings.reasoningMethod }])}
         />
         <SelectField
-          label="Model"
+          label="LLM 模型"
           value={settings.model}
           onChange={(model) => patch({ model })}
           options={optionOr("model", [{ label: "默认", value: "" }])}
@@ -291,15 +302,15 @@ export function ChatSettingsPanel({
         <SwitchField
           label="GraphRAG"
           description="融合实体、关系和多跳路径证据"
-          checked={settings.retrieval.graphEnabled}
-          onChange={(graphEnabled) => patchRetrieval({ graphEnabled })}
+          checked={graphConfig.enabled}
+          onChange={(enabled) => patchGraph({ enabled })}
         />
-        {settings.retrieval.graphEnabled ? (
+        {graphConfig.enabled ? (
           <>
             <SelectField
               label="图谱引擎"
-              value={settings.retrieval.graphProvider ?? "lightrag"}
-              onChange={(graphProvider) => patchRetrieval({ graphProvider })}
+              value={graphConfig.provider ?? "lightrag"}
+              onChange={(provider) => patchGraph({ provider })}
               options={optionOr("graphProvider", [
                 { label: "LightRAG", value: "lightrag" },
                 { label: "NanoGraphRAG", value: "nano" },
@@ -307,8 +318,8 @@ export function ChatSettingsPanel({
             />
             <SelectField
               label="图谱检索"
-              value={settings.retrieval.graphSearchType ?? "local"}
-              onChange={(graphSearchType) => patchRetrieval({ graphSearchType })}
+              value={graphConfig.searchType ?? "local"}
+              onChange={(searchType) => patchGraph({ searchType })}
               options={optionOr("graphSearchType", [
                 { label: "Local", value: "local" },
                 { label: "Global", value: "global" },

@@ -5,10 +5,10 @@ interface AppShellProps {
   sidebar: ReactNode;
   workspace: ReactNode;
   referencePanel: ReactNode;
-  activeView: "chat" | "files" | "eval";
+  activeView: "chat" | "files" | "eval" | "settings";
   sidebarOpen: boolean;
   referenceOpen: boolean;
-  onSelectView: (view: "chat" | "files" | "eval") => void;
+  onSelectView: (view: "chat" | "files" | "eval" | "settings") => void;
   onOpenSidebar: () => void;
   onOpenReferences: () => void;
   onCloseDrawers: () => void;
@@ -36,7 +36,7 @@ export function AppShell({
         onOpenSidebar={onOpenSidebar}
         onOpenReferences={onOpenReferences}
       />
-      <div className={`app-body ${activeView !== "chat" ? "app-body--files" : ""}`}>
+      <div className={`app-body ${activeView !== "chat" ? "app-body--full" : ""}`}>
         {sidebar}
         {workspace}
         {referencePanel}

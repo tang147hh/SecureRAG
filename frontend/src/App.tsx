@@ -15,6 +15,7 @@ import { AppShell } from "./components/AppShell";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { EvaluationWorkspace } from "./components/EvaluationWorkspace";
 import { FileWorkspace } from "./components/FileWorkspace";
+import { ModelSettingsWorkspace } from "./components/ModelSettingsWorkspace";
 import { ReferencePanel } from "./components/ReferencePanel";
 import { Sidebar } from "./components/Sidebar";
 
@@ -46,7 +47,10 @@ function App() {
   const [references, setReferences] = useState<ReferenceDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState<string>();
   const [settings, setSettings] = useState<ChatSettings>();
-  const [activeView, setActiveView] = useState<"chat" | "files" | "eval">("chat");
+  const [settingsDraft, setSettingsDraft] = useState<ChatSettings>();
+  const [activeView, setActiveView] = useState<
+    "chat" | "files" | "eval" | "settings"
+  >("chat");
   const [fileDirectories, setFileDirectories] = useState<FileDirectory[]>([]);
   const [fileItems, setFileItems] = useState<FileItem[]>([]);
   const [activeFileDetail, setActiveFileDetail] = useState<FileDetail>();
@@ -81,6 +85,7 @@ function App() {
       setConversations(nextConversations);
       setActiveConversationId(nextConversations[0]?.id);
       setSettings(chatSettings);
+      setSettingsDraft(chatSettings);
       setReferences(defaultReferences);
       setActiveDocumentId(defaultReferences[0]?.id);
       apiClient
@@ -208,8 +213,34 @@ function App() {
     setSettings(nextSettings);
     window.clearTimeout(settingsSaveTimer.current);
     settingsSaveTimer.current = window.setTimeout(() => {
-      void apiClient.saveChatSettings(nextSettings);
+      void apiClient.saveChatSettings({
+        ...nextSettings,
+        modelConfig: { name: "", baseUrl: "", model: "", apiKey: "", isDefault: false },
+        embeddingConfig: {
+          name: "",
+          baseUrl: "",
+          model: "",
+          apiKey: "",
+          isDefault: false,
+        },
+      });
     }, 240);
+  };
+
+  const handleSettingsDraftChange = (nextSettings: ChatSettings) => {
+    setSettingsDraft(nextSettings);
+  };
+
+  const handleSaveSettings = async () => {
+    if (!settingsDraft) return;
+    try {
+      const saved = await apiClient.saveChatSettings(settingsDraft);
+      setSettings(saved);
+      setSettingsDraft(saved);
+      window.alert(saved.settingError || "设置已保存。");
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "设置保存失败。");
+    }
   };
 
   const handleUploadFiles = async (
@@ -220,7 +251,10 @@ function App() {
     if (!files.length) return;
     setIsUploading(true);
     try {
-      const uploadedReferences = await apiClient.uploadFiles(files, directoryId, options);
+      const uploadedReferences = await apiClient.uploadFiles(files, directoryId, {
+        ...options,
+        embeddingModel: settings?.embeddingModel ?? "",
+      });
       setReferences((current) => [...uploadedReferences, ...current]);
       setActiveDocumentId(uploadedReferences[0]?.id);
       const workspace = await apiClient.listFileWorkspace();
@@ -237,7 +271,10 @@ function App() {
   const handleReembedFile = async (fileId: string, options?: UploadIndexingOptions) => {
     setIsUploading(true);
     try {
-      const detail = await apiClient.reembedFile(fileId, options);
+      const detail = await apiClient.reembedFile(fileId, {
+        ...options,
+        embeddingModel: settings?.embeddingModel ?? "",
+      });
       setActiveFileDetail(detail);
       const workspace = await apiClient.listFileWorkspace();
       setFileDirectories(workspace.directories);
@@ -468,8 +505,14 @@ function App() {
             onSelectFilesForChat={setSelectedFileIds}
             onOpenChat={() => setActiveView("chat")}
           />
-        ) : (
+        ) : activeView === "eval" ? (
           <EvaluationWorkspace files={fileItems} />
+        ) : (
+          <ModelSettingsWorkspace
+            settings={settingsDraft ?? settings}
+            onChange={handleSettingsDraftChange}
+            onSave={handleSaveSettings}
+          />
         )
       }
       referencePanel={

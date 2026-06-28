@@ -316,9 +316,9 @@ class RetrievalSettings(BaseModel):
     llmRerank: bool = False
     mmr: bool = False
     prioritizeTable: bool = False
-    graphEnabled: bool = False
-    graphProvider: Literal["lightrag", "nano"] = "lightrag"
-    graphSearchType: Literal["local", "global", "hybrid"] = "local"
+    graphEnabled: bool | None = None
+    graphProvider: Literal["lightrag", "nano"] | None = None
+    graphSearchType: Literal["local", "global", "hybrid"] | None = None
 
 
 class SelectOption(BaseModel):
@@ -326,10 +326,84 @@ class SelectOption(BaseModel):
     value: str
 
 
+class ModelProviderConfig(BaseModel):
+    name: str = ""
+    baseUrl: str = ""
+    model: str = ""
+    apiKey: str = ""
+    timeout: int | None = Field(default=None, ge=1, le=600)
+    isDefault: bool = True
+    hasApiKey: bool = False
+
+
+class RerankServiceConfig(BaseModel):
+    enabled: bool = True
+    provider: str = "default"
+    model: str = ""
+    baseUrl: str = ""
+    apiKey: str = ""
+    timeout: int | None = Field(default=30, ge=1, le=600)
+    hasApiKey: bool = False
+
+
+class GraphServiceConfig(BaseModel):
+    enabled: bool = False
+    provider: Literal["lightrag", "nano"] | str = "lightrag"
+    searchType: Literal["local", "global", "hybrid"] | str = "local"
+    batchSize: int = Field(default=5, ge=1, le=100)
+
+
+class FileProcessingServiceConfig(BaseModel):
+    readerMode: str = "default"
+    ocrProvider: str = "default"
+    chunkSize: int = Field(default=1024, ge=1, le=50000)
+    chunkOverlap: int = Field(default=256, ge=0, le=50000)
+    tableExtraction: bool = True
+
+
+class SecurityAuditServiceConfig(BaseModel):
+    enabled: bool = True
+    logRetentionDays: int = Field(default=180, ge=1, le=3650)
+    auditFrequency: str = "monthly"
+    maskSecrets: bool = True
+
+
+class ServiceConfigs(BaseModel):
+    rerank: RerankServiceConfig = Field(default_factory=RerankServiceConfig)
+    graph: GraphServiceConfig = Field(default_factory=GraphServiceConfig)
+    fileProcessing: FileProcessingServiceConfig = Field(
+        default_factory=FileProcessingServiceConfig
+    )
+    securityAudit: SecurityAuditServiceConfig = Field(
+        default_factory=SecurityAuditServiceConfig
+    )
+
+
+def _sync_graph_service_config(settings: "ChatSettings") -> GraphServiceConfig:
+    graph = settings.serviceConfigs.graph
+    if settings.retrieval.graphEnabled is not None:
+        graph.enabled = settings.retrieval.graphEnabled
+    if settings.retrieval.graphProvider:
+        graph.provider = settings.retrieval.graphProvider
+    if settings.retrieval.graphSearchType:
+        graph.searchType = settings.retrieval.graphSearchType
+    settings.retrieval.graphEnabled = None
+    settings.retrieval.graphProvider = None
+    settings.retrieval.graphSearchType = None
+    return graph
+
+
 class ChatSettings(BaseModel):
     suggestedChat: bool = True
     reasoningMethod: str = "simple"
     model: str = ""
+    embeddingModel: str = ""
+    modelConfig: ModelProviderConfig = Field(default_factory=ModelProviderConfig)
+    embeddingConfig: ModelProviderConfig = Field(default_factory=ModelProviderConfig)
+    modelConfigs: dict[str, ModelProviderConfig] = Field(default_factory=dict)
+    embeddingConfigs: dict[str, ModelProviderConfig] = Field(default_factory=dict)
+    settingError: str | None = None
+    serviceConfigs: ServiceConfigs = Field(default_factory=ServiceConfigs)
     language: str = "zh"
     citationHighlight: str = "highlight"
     mindmap: bool = True
@@ -460,6 +534,7 @@ class MoveFilesPayload(BaseModel):
 class UploadIndexingOptions(BaseModel):
     chunkSize: int | None = Field(default=None, ge=1, le=50000)
     chunkOverlap: int | None = Field(default=None, ge=0, le=50000)
+    embeddingModel: str | None = None
     reindex: bool = False
 
 
@@ -626,9 +701,9 @@ class ReactApiService:
             next_settings.retrieval.retrievalMode = "hybrid"
             return next_settings
         if variant == "graph":
-            next_settings.retrieval.graphEnabled = True
-            next_settings.retrieval.graphProvider = "lightrag"
-            next_settings.retrieval.graphSearchType = "local"
+            next_settings.serviceConfigs.graph.enabled = True
+            next_settings.serviceConfigs.graph.provider = "lightrag"
+            next_settings.serviceConfigs.graph.searchType = "local"
             return next_settings
         if variant == "current":
             return next_settings
@@ -686,10 +761,11 @@ class ReactApiService:
         strategy: str,
         experiment_tag: str | None = None,
     ) -> dict[str, Any]:
-        retrieval = settings.retrieval.model_dump()
+        graph_config = _sync_graph_service_config(settings)
+        retrieval = settings.retrieval.model_dump(exclude_none=True)
         retrieval_mode = str(retrieval.get("retrievalMode") or "hybrid")
         enhancement = str(retrieval.get("enhancement") or "none")
-        snapshot = settings.model_dump()
+        snapshot = settings.model_dump(exclude_none=True)
         snapshot.update(
             {
                 "evaluation_variant": strategy,
@@ -706,9 +782,9 @@ class ReactApiService:
                     "mmr": bool(retrieval.get("mmr")),
                     "prioritize_table": bool(retrieval.get("prioritizeTable")),
                     "graph_rag": {
-                        "enabled": bool(retrieval.get("graphEnabled")),
-                        "provider": retrieval.get("graphProvider") or "lightrag",
-                        "search_type": retrieval.get("graphSearchType") or "local",
+                        "enabled": bool(graph_config.enabled),
+                        "provider": graph_config.provider or "lightrag",
+                        "search_type": graph_config.searchType or "local",
                         "implemented": True,
                     },
                     "rrf": {
@@ -975,6 +1051,106 @@ class ReactApiService:
                 output.append(SelectOption(label=str(item), value=str(item)))
         return output
 
+    @staticmethod
+    def _model_config_from_info(
+        info: dict[str, Any],
+        fallback_name: str,
+        fallback_timeout: int,
+    ) -> ModelProviderConfig:
+        spec = info.get("spec") if isinstance(info, dict) else {}
+        spec = spec if isinstance(spec, dict) else {}
+        return ModelProviderConfig(
+            name=str(info.get("name") or fallback_name) if isinstance(info, dict) else fallback_name,
+            baseUrl=str(spec.get("base_url") or ""),
+            model=str(spec.get("model") or ""),
+            apiKey="",
+            timeout=int(spec.get("timeout") or fallback_timeout),
+            isDefault=bool(info.get("default", False)) if isinstance(info, dict) else True,
+            hasApiKey=bool(spec.get("api_key")),
+        )
+
+    @staticmethod
+    def _openai_compatible_spec(
+        model_type: str,
+        config: ModelProviderConfig,
+        existing: dict[str, Any] | None = None,
+        fallback_api_key: str = "",
+        fallback_timeout: int = 60,
+    ) -> dict[str, Any]:
+        existing = existing or {}
+        api_key = config.apiKey or str(existing.get("api_key") or fallback_api_key)
+        spec = {
+            "__type__": model_type,
+            "base_url": config.baseUrl.strip(),
+            "model": config.model.strip(),
+            "api_key": api_key,
+            "timeout": config.timeout or fallback_timeout,
+        }
+        return {key: value for key, value in spec.items() if value not in ("", None)}
+
+    @staticmethod
+    def _empty_model_config(fallback_timeout: int) -> ModelProviderConfig:
+        return ModelProviderConfig(timeout=fallback_timeout, isDefault=False)
+
+    def _llm_config(self, selected_name: str) -> ModelProviderConfig:
+        try:
+            from ktem.llms.manager import llms
+
+            info = llms.info()
+            name = selected_name or llms.get_default_name()
+            return self._model_config_from_info(
+                info.get(name, {}), name, fallback_timeout=60
+            )
+        except Exception:
+            return ModelProviderConfig(name=selected_name or "deepseek", timeout=60)
+
+    def _llm_configs(self) -> dict[str, ModelProviderConfig]:
+        try:
+            from ktem.llms.manager import llms
+
+            return {
+                name: self._model_config_from_info(info, name, fallback_timeout=60)
+                for name, info in llms.info().items()
+            }
+        except Exception:
+            return {}
+
+    def _embedding_config(self, selected_name: str) -> ModelProviderConfig:
+        try:
+            from ktem.embeddings.manager import embedding_models_manager
+
+            info = embedding_models_manager.info()
+            name = selected_name or embedding_models_manager.get_default_name()
+            return self._model_config_from_info(
+                info.get(name, {}), name, fallback_timeout=30
+            )
+        except Exception:
+            return ModelProviderConfig(name=selected_name or "ollama", timeout=30)
+
+    def _embedding_configs(self) -> dict[str, ModelProviderConfig]:
+        try:
+            from ktem.embeddings.manager import embedding_models_manager
+
+            return {
+                name: self._model_config_from_info(info, name, fallback_timeout=30)
+                for name, info in embedding_models_manager.info().items()
+            }
+        except Exception:
+            return {}
+
+    def _service_configs(self, stored: dict[str, Any]) -> ServiceConfigs:
+        raw = stored.get("service_configs")
+        base = raw if isinstance(raw, dict) else {}
+        configs = ServiceConfigs(**base)
+        if "graph" not in base:
+            configs.graph.enabled = bool(stored.get("graph_enabled", False))
+            configs.graph.provider = stored.get("graph_provider") or "lightrag"
+            configs.graph.searchType = stored.get("graph_search_type") or "local"
+        if configs.rerank.apiKey:
+            configs.rerank.apiKey = ""
+            configs.rerank.hasApiKey = True
+        return configs
+
     def get_chat_settings(self, user_id: str) -> ChatSettings:
         runtime = self.app_runtime
         stored = {}
@@ -1001,6 +1177,12 @@ class ReactApiService:
             suggestedChat=bool(stored.get("suggestedChat", True)),
             reasoningMethod=stored.get("reasoning_type") or "simple",
             model=stored.get("model_type") or "",
+            embeddingModel=stored.get("embedding_model") or "",
+            modelConfig=self._empty_model_config(60),
+            embeddingConfig=self._empty_model_config(30),
+            modelConfigs=self._llm_configs(),
+            embeddingConfigs=self._embedding_configs(),
+            serviceConfigs=self._service_configs(stored),
             language=stored.get("language") or "zh",
             citationHighlight=stored.get("citation") or "highlight",
             mindmap=bool(stored.get("use_mindmap", True)),
@@ -1018,9 +1200,6 @@ class ReactApiService:
                 llmRerank=bool(stored.get("use_llm_reranking", False)),
                 mmr=bool(stored.get("use_mmr", False)),
                 prioritizeTable=bool(stored.get("prioritize_table", False)),
-                graphEnabled=bool(stored.get("graph_enabled", False)),
-                graphProvider=stored.get("graph_provider") or "lightrag",
-                graphSearchType=stored.get("graph_search_type") or "local",
             ),
             options=options,
         )
@@ -1042,12 +1221,24 @@ class ReactApiService:
             ]
         except Exception:
             pass
+        embedding_choices = [SelectOption(label="默认", value="")]
+        try:
+            from ktem.embeddings.manager import embedding_models_manager
+
+            embedding_choices += [
+                SelectOption(label=name, value=name)
+                for name in embedding_models_manager.options().keys()
+                if name != "default"
+            ]
+        except Exception:
+            pass
 
         templates = self.chat_page._load_prompt_template_map(user_id)
         return {
             "reasoningMethod": self._option_values(reasoning_choices),
             "language": self._option_values(language_choices),
             "model": model_choices,
+            "embeddingModel": embedding_choices,
             "citationHighlight": [
                 SelectOption(label="高亮", value="highlight"),
                 SelectOption(label="内联", value="inline"),
@@ -1079,6 +1270,21 @@ class ReactApiService:
         }
 
     def save_chat_settings(self, settings: ChatSettings, user_id: str) -> ChatSettings:
+        self._save_new_model_configs(settings)
+        _sync_graph_service_config(settings)
+        stored = {}
+        if self.app_runtime is not None and hasattr(self.app_runtime, "chat_page"):
+            stored = self.chat_page._read_chat_runtime_settings().get(str(user_id), {})
+        previous_service_configs = self._service_configs_for_save(stored)
+        service_configs = settings.serviceConfigs.model_dump()
+        previous_rerank_key = (
+            previous_service_configs.get("rerank", {}).get("apiKey")
+            if isinstance(previous_service_configs, dict)
+            else ""
+        )
+        if not service_configs.get("rerank", {}).get("apiKey") and previous_rerank_key:
+            service_configs["rerank"]["apiKey"] = previous_rerank_key
+
         template_name = (
             settings.promptTemplate or DEFAULT_PROMPT_TEMPLATE_NAME
         ).strip()
@@ -1100,6 +1306,7 @@ class ReactApiService:
             user_id,
             settings.reasoningMethod,
             settings.model,
+            settings.embeddingModel,
             settings.language,
             settings.citationHighlight,
             settings.mindmap,
@@ -1112,11 +1319,65 @@ class ReactApiService:
             settings.retrieval.mmr,
             settings.retrieval.prioritizeTable,
             template_name,
-            settings.retrieval.graphEnabled,
-            settings.retrieval.graphProvider,
-            settings.retrieval.graphSearchType,
+            service_configs,
         )
         return self.get_chat_settings(user_id)
+
+    def _service_configs_for_save(self, stored: dict[str, Any]) -> dict[str, Any]:
+        raw = stored.get("service_configs")
+        return raw if isinstance(raw, dict) else {}
+
+    def _save_new_model_configs(self, settings: ChatSettings) -> None:
+        llm_name = settings.modelConfig.name.strip()
+        if llm_name and settings.modelConfig.model.strip():
+            from ktem.llms.manager import llms
+
+            if llm_name in llms.info():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"LLM 配置 `{llm_name}` 已存在，请使用新的配置名称。",
+                )
+            else:
+                spec = self._openai_compatible_spec(
+                    "kotaemon.llms.ChatOpenAI",
+                    settings.modelConfig,
+                    {},
+                    fallback_timeout=60,
+                )
+                llms.add(llm_name, spec, settings.modelConfig.isDefault)
+                if llms._allowed_names is not None:
+                    llms._allowed_names.add(llm_name)
+                    llms.load()
+                settings.model = llm_name
+                settings.modelConfig = ModelProviderConfig()
+
+        embedding_name = settings.embeddingConfig.name.strip()
+        if embedding_name and settings.embeddingConfig.model.strip():
+            from ktem.embeddings.manager import embedding_models_manager
+
+            if embedding_name in embedding_models_manager.info():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Embedding 配置 `{embedding_name}` 已存在，请使用新的配置名称。",
+                )
+            else:
+                spec = self._openai_compatible_spec(
+                    "kotaemon.embeddings.OpenAIEmbeddings",
+                    settings.embeddingConfig,
+                    {},
+                    fallback_api_key="ollama",
+                    fallback_timeout=30,
+                )
+                embedding_models_manager.add(
+                    embedding_name,
+                    spec,
+                    settings.embeddingConfig.isDefault,
+                )
+                if embedding_models_manager._allowed_names is not None:
+                    embedding_models_manager._allowed_names.add(embedding_name)
+                    embedding_models_manager.load()
+                settings.embeddingModel = embedding_name
+                settings.embeddingConfig = ModelProviderConfig()
 
     def list_references(self, user_id: str) -> list[ReferenceDocument]:
         if self.app_runtime is None:
@@ -1792,6 +2053,8 @@ class ReactApiService:
             index = self._file_index()
             settings = deepcopy(settings)
             settings[f"index.options.{index.id}.quick_index_mode"] = False
+            if options.embeddingModel:
+                settings[f"index.options.{index.id}.embedding"] = options.embeddingModel
             if options.chunkSize is not None:
                 settings[f"index.options.{index.id}.chunk_size"] = options.chunkSize
             if options.chunkOverlap is not None:
@@ -1862,6 +2125,7 @@ class ReactApiService:
         options = UploadIndexingOptions(
             chunkSize=options.chunkSize if options else None,
             chunkOverlap=options.chunkOverlap if options else None,
+            embeddingModel=options.embeddingModel if options else None,
             reindex=True,
         )
         if (
@@ -1918,6 +2182,8 @@ class ReactApiService:
         index = self._file_index()
         settings = deepcopy(_load_user_settings(user_id, self.app_runtime))
         settings[f"index.options.{index.id}.quick_index_mode"] = False
+        if options.embeddingModel:
+            settings[f"index.options.{index.id}.embedding"] = options.embeddingModel
         if options.chunkSize is not None:
             settings[f"index.options.{index.id}.chunk_size"] = options.chunkSize
         if options.chunkOverlap is not None:
@@ -2092,10 +2358,12 @@ class ReactApiService:
             templates = self.chat_page._load_prompt_template_map(user_id)
             if payload.settings.promptTemplate in templates:
                 prompt_text = templates[payload.settings.promptTemplate]
+        graph_config = _sync_graph_service_config(payload.settings)
         pipeline, reasoning_state = self.chat_page.create_pipeline(
             settings,
             payload.settings.reasoningMethod,
             payload.settings.model,
+            payload.settings.embeddingModel,
             payload.settings.mindmap,
             payload.settings.citationHighlight,
             payload.settings.language,
@@ -2112,9 +2380,9 @@ class ReactApiService:
             None,
             user_id,
             *selected_components,
-            session_graph_enabled=payload.settings.retrieval.graphEnabled,
-            session_graph_provider=payload.settings.retrieval.graphProvider,
-            session_graph_search_type=payload.settings.retrieval.graphSearchType,
+            session_graph_enabled=graph_config.enabled,
+            session_graph_provider=graph_config.provider,
+            session_graph_search_type=graph_config.searchType,
         )
 
         queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -2128,11 +2396,15 @@ class ReactApiService:
             "llmRerank": payload.settings.retrieval.llmRerank,
             "mmr": payload.settings.retrieval.mmr,
             "prioritizeTable": payload.settings.retrieval.prioritizeTable,
-            "graphEnabled": payload.settings.retrieval.graphEnabled,
-            "graphProvider": payload.settings.retrieval.graphProvider,
-            "graphSearchType": payload.settings.retrieval.graphSearchType,
+            "graph": {
+                "enabled": graph_config.enabled,
+                "provider": graph_config.provider,
+                "searchType": graph_config.searchType,
+            },
             "promptTemplate": payload.settings.promptTemplate,
             "promptTemplateText": prompt_text,
+            "llmModel": payload.settings.model,
+            "embeddingModel": payload.settings.embeddingModel,
         }
         trace_recorder = RagTraceRecorder(
             conversation_id=payload.conversationId,
@@ -2748,11 +3020,13 @@ router = APIRouter(prefix="/api/react", tags=["react-frontend"])
 def _upload_indexing_options(
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
+    embedding_model: str | None = None,
     reindex: bool = False,
 ) -> UploadIndexingOptions:
     return UploadIndexingOptions(
         chunkSize=chunk_size,
         chunkOverlap=chunk_overlap,
+        embeddingModel=embedding_model,
         reindex=reindex,
     )
 
@@ -3021,9 +3295,12 @@ async def upload_files(
     directory_id: str | None = None,
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
+    embedding_model: str | None = None,
     reindex: bool = False,
 ):
-    options = _upload_indexing_options(chunk_size, chunk_overlap, reindex)
+    options = _upload_indexing_options(
+        chunk_size, chunk_overlap, embedding_model, reindex
+    )
     return await service.upload_files(
         files,
         _require_user_id(request),
@@ -3038,11 +3315,12 @@ async def reembed_file(
     request: Request,
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
+    embedding_model: str | None = None,
 ):
     return await service.reembed_file(
         file_id,
         _require_user_id(request),
-        _upload_indexing_options(chunk_size, chunk_overlap, True),
+        _upload_indexing_options(chunk_size, chunk_overlap, embedding_model, True),
     )
 
 
@@ -3094,12 +3372,12 @@ async def get_file_detail(
     return service.get_file_detail(file_id, _require_user_id(request), type_filter)
 
 
-@router.get("/settings", response_model=ChatSettings)
+@router.get("/settings", response_model=ChatSettings, response_model_exclude_none=True)
 async def get_chat_settings(request: Request):
     return service.get_chat_settings(_require_user_id(request))
 
 
-@router.put("/settings", response_model=ChatSettings)
+@router.put("/settings", response_model=ChatSettings, response_model_exclude_none=True)
 async def save_chat_settings(settings: ChatSettings, request: Request):
     return service.save_chat_settings(settings, _require_user_id(request))
 

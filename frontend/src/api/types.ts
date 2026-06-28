@@ -237,6 +237,7 @@ export interface FileWorkspaceState {
 export interface UploadIndexingOptions {
   chunkSize?: number | null;
   chunkOverlap?: number | null;
+  embeddingModel?: string | null;
   reindex?: boolean;
 }
 
@@ -249,9 +250,6 @@ export interface RetrievalSettings {
   llmRerank: boolean;
   mmr: boolean;
   prioritizeTable: boolean;
-  graphEnabled: boolean;
-  graphProvider: "lightrag" | "nano" | string;
-  graphSearchType: "local" | "global" | "hybrid" | string;
 }
 
 export interface SelectOption {
@@ -259,10 +257,66 @@ export interface SelectOption {
   value: string;
 }
 
+export interface ModelProviderConfig {
+  name: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  timeout?: number | null;
+  isDefault: boolean;
+  hasApiKey?: boolean;
+}
+
+export interface RerankServiceConfig {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  timeout?: number | null;
+  hasApiKey?: boolean;
+}
+
+export interface GraphServiceConfig {
+  enabled: boolean;
+  provider: "lightrag" | "nano" | string;
+  searchType: "local" | "global" | "hybrid" | string;
+  batchSize: number;
+}
+
+export interface FileProcessingServiceConfig {
+  readerMode: string;
+  ocrProvider: string;
+  chunkSize: number;
+  chunkOverlap: number;
+  tableExtraction: boolean;
+}
+
+export interface SecurityAuditServiceConfig {
+  enabled: boolean;
+  logRetentionDays: number;
+  auditFrequency: string;
+  maskSecrets: boolean;
+}
+
+export interface ServiceConfigs {
+  rerank: RerankServiceConfig;
+  graph: GraphServiceConfig;
+  fileProcessing: FileProcessingServiceConfig;
+  securityAudit: SecurityAuditServiceConfig;
+}
+
 export interface ChatSettings {
   suggestedChat: boolean;
   reasoningMethod: string;
   model: string;
+  embeddingModel: string;
+  modelConfig: ModelProviderConfig;
+  embeddingConfig: ModelProviderConfig;
+  modelConfigs?: Record<string, ModelProviderConfig>;
+  embeddingConfigs?: Record<string, ModelProviderConfig>;
+  settingError?: string | null;
+  serviceConfigs: ServiceConfigs;
   language: string;
   citationHighlight: string;
   mindmap: boolean;

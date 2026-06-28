@@ -2,8 +2,8 @@ import { Activity, HelpCircle, Menu, Moon, PanelRightOpen, ShieldCheck } from "l
 import { IconButton } from "./IconButton";
 
 interface HeaderNavProps {
-  activeView: "chat" | "files" | "eval";
-  onSelectView: (view: "chat" | "files" | "eval") => void;
+  activeView: "chat" | "files" | "eval" | "settings";
+  onSelectView: (view: "chat" | "files" | "eval" | "settings") => void;
   onOpenSidebar: () => void;
   onOpenReferences: () => void;
 }
@@ -38,7 +38,8 @@ export function HeaderNav({
             className={
               (item === "聊天" && activeView === "chat") ||
               (item === "文件" && activeView === "files") ||
-              (item === "评测" && activeView === "eval")
+              (item === "评测" && activeView === "eval") ||
+              (item === "设置" && activeView === "settings")
                 ? "is-active"
                 : ""
             }
@@ -47,6 +48,7 @@ export function HeaderNav({
               if (item === "聊天") onSelectView("chat");
               if (item === "文件") onSelectView("files");
               if (item === "评测") onSelectView("eval");
+              if (item === "设置") onSelectView("settings");
             }}
           >
             {item === "帮助" ? <HelpCircle size={15} /> : null}

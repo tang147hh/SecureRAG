@@ -20,6 +20,7 @@ import type {
   SourcePermissionItem,
   UploadIndexingOptions,
 } from "./types";
+import { normalizeChatSettings } from "./settings";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/react";
 
@@ -130,14 +131,20 @@ export const apiClient = {
   sendMessage: (payload: SendMessagePayload) =>
     request<SendMessageResult>("/chat/send", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        settings: normalizeChatSettings(payload.settings),
+      }),
     }),
 
   async *streamMessage(payload: SendMessagePayload): AsyncGenerator<string, SendMessageResult, void> {
     const response = await fetch(`${API_BASE}/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        settings: normalizeChatSettings(payload.settings),
+      }),
     });
     return yield* streamFromResponse(response);
   },
@@ -151,6 +158,7 @@ export const apiClient = {
     if (options.chunkOverlap !== undefined && options.chunkOverlap !== null) {
       params.set("chunk_overlap", String(options.chunkOverlap));
     }
+    if (options.embeddingModel) params.set("embedding_model", options.embeddingModel);
     if (options.reindex) params.set("reindex", "true");
     const query = params.toString() ? `?${params.toString()}` : "";
     const response = await fetch(`${API_BASE}/files/upload${query}`, {
@@ -169,6 +177,7 @@ export const apiClient = {
     if (options.chunkOverlap !== undefined && options.chunkOverlap !== null) {
       params.set("chunk_overlap", String(options.chunkOverlap));
     }
+    if (options.embeddingModel) params.set("embedding_model", options.embeddingModel);
     const query = params.toString() ? `?${params.toString()}` : "";
     return request<FileDetail>(`/files/${fileId}/reembed${query}`, { method: "POST" });
   },
@@ -208,13 +217,13 @@ export const apiClient = {
       body: JSON.stringify({ fileIds, directoryId: directoryId ?? null }),
     }),
 
-  getChatSettings: () => request<ChatSettings>("/settings"),
+  getChatSettings: async () => normalizeChatSettings(await request<ChatSettings>("/settings")),
 
   saveChatSettings: (settings: ChatSettings) =>
     request<ChatSettings>("/settings", {
       method: "PUT",
-      body: JSON.stringify(settings),
-    }),
+      body: JSON.stringify(normalizeChatSettings(settings)),
+    }).then(normalizeChatSettings),
 
   listDefaultReferences: () => request<ReferenceDocument[]>("/references/default"),
 

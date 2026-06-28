@@ -174,6 +174,7 @@ class ReactChatRuntime:
         user_id,
         reasoning_type,
         model_type,
+        embedding_model,
         language,
         citation,
         use_mindmap,
@@ -186,15 +187,16 @@ class ReactChatRuntime:
         use_mmr,
         prioritize_table,
         prompt_template_select,
-        graph_enabled=False,
-        graph_provider="lightrag",
-        graph_search_type="local",
+        service_configs=None,
     ):
         data = self._read_chat_runtime_settings()
         user_key = str(user_id or "default")
         data[user_key] = {
             "reasoning_type": reasoning_type,
             "model_type": "" if model_type in (DEFAULT_SETTING, None) else model_type,
+            "embedding_model": ""
+            if embedding_model in (DEFAULT_SETTING, None)
+            else embedding_model,
             "language": language,
             "citation": citation,
             "use_mindmap": bool(use_mindmap),
@@ -206,11 +208,9 @@ class ReactChatRuntime:
             "use_llm_reranking": bool(use_llm_reranking),
             "use_mmr": bool(use_mmr),
             "prioritize_table": bool(prioritize_table),
+            "service_configs": service_configs or {},
             "prompt_template_select": prompt_template_select
             or DEFAULT_PROMPT_TEMPLATE_NAME,
-            "graph_enabled": bool(graph_enabled),
-            "graph_provider": graph_provider or "lightrag",
-            "graph_search_type": graph_search_type or "local",
         }
         self._write_chat_runtime_settings(data)
 
@@ -363,6 +363,7 @@ class ReactChatRuntime:
         settings_dict: dict,
         session_reasoning_type: str,
         session_llm: str,
+        session_embedding: str,
         session_use_mindmap: bool | str,
         session_use_citation: str,
         session_language: str,
@@ -426,6 +427,12 @@ class ReactChatRuntime:
             else "none"
         )
 
+        embedding_override = (
+            None
+            if session_embedding in (DEFAULT_SETTING, None, "", "default")
+            else session_embedding
+        )
+
         try:
             session_top_k = int(session_top_k)
             session_first_round_multiplier = int(session_first_round_multiplier)
@@ -455,6 +462,8 @@ class ReactChatRuntime:
             settings_dict[prefix + "graph_search_type"] = (
                 session_graph_search_type or "local"
             )
+            if embedding_override:
+                settings_dict[prefix + "embedding"] = embedding_override
 
         retrievers = []
         if command_state == WEB_SEARCH_COMMAND:

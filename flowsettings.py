@@ -114,8 +114,8 @@ def _env_name_set(key, default):
     return names or None
 
 
-KH_ALLOWED_LLM_NAMES = _env_name_set("KH_ALLOWED_LLM_NAMES", {"deepseek"})
-KH_ALLOWED_EMBEDDING_NAMES = _env_name_set("KH_ALLOWED_EMBEDDING_NAMES", {"ollama"})
+KH_ALLOWED_LLM_NAMES = _env_name_set("KH_ALLOWED_LLM_NAMES", None)
+KH_ALLOWED_EMBEDDING_NAMES = _env_name_set("KH_ALLOWED_EMBEDDING_NAMES", None)
 
 DEEPSEEK_API_KEY = config("DEEPSEEK_API_KEY", default="")
 

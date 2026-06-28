@@ -221,12 +221,12 @@ button {
   overflow: hidden;
 }
 
-.app-body--files {
+.app-body--full {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.app-body--files > .sidebar,
-.app-body--files > .reference-panel {
+.app-body--full > .sidebar,
+.app-body--full > .reference-panel {
   display: none;
 }
 
@@ -309,7 +309,8 @@ button {
 }
 
 .section-heading span,
-.section-title {
+.section-title,
+.settings-note {
   color: var(--text-secondary);
   font-weight: 700;
   font-size: 0.86rem;
@@ -318,6 +319,14 @@ button {
 .section-title {
   gap: 0.45rem;
   margin-bottom: 0.7rem;
+}
+
+.settings-note {
+  margin: 0.62rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .conversation-list {
@@ -510,6 +519,89 @@ button {
   margin-top: 0.7rem;
   display: grid;
   gap: 0.7rem;
+}
+
+.model-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 0.65rem;
+}
+
+.model-config-grid .switch-field {
+  grid-column: 1 / -1;
+  min-height: 2.35rem;
+}
+
+.model-config-grid__wide {
+  grid-column: 1 / -1;
+}
+
+.settings-main-panel {
+  width: min(72rem, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  padding: clamp(1rem, 1.8vw, 1.35rem);
+  overflow: auto;
+}
+
+.settings-workspace__head {
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-secondary);
+}
+
+.settings-workspace__head > div {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.settings-workspace__head span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.settings-workspace__head strong {
+  font-size: 1.1rem;
+}
+
+.settings-save-button {
+  min-height: 2.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.7rem;
+  background: var(--accent-gradient);
+  color: white;
+  padding: 0 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.settings-subtitle {
+  margin-top: 0.9rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.model-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(0.85rem, 1.4vw, 1.2rem);
+  padding-top: 1rem;
+}
+
+.model-settings-card {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.9rem;
+  background: rgba(2, 6, 23, 0.22);
+  padding: clamp(0.85rem, 1.4vw, 1.05rem);
 }
 
 .prompt-template-editor .field {
@@ -836,14 +928,22 @@ button {
   white-space: nowrap;
 }
 
-.file-workspace {
+.file-workspace,
+.settings-workspace {
   min-width: 0;
   min-height: 0;
   grid-column: 1 / -1;
+}
+
+.file-workspace {
   display: grid;
   grid-template-columns: minmax(13rem, 0.55fr) minmax(0, 1.75fr) minmax(18rem, 0.9fr);
   gap: clamp(0.75rem, 1.2vw, 1.25rem);
   overflow: hidden;
+}
+
+.settings-workspace {
+  overflow: auto;
 }
 
 .eval-workspace {
@@ -859,6 +959,7 @@ button {
 .file-sidebar,
 .file-main,
 .file-detail-panel,
+.settings-main-panel,
 .eval-sidebar,
 .eval-main,
 .eval-results {
@@ -3260,6 +3361,10 @@ button.message-bubble:disabled {
   .eval-workspace {
     grid-template-columns: minmax(0, 1fr);
     overflow: auto;
+  }
+
+  .model-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .file-sidebar,
